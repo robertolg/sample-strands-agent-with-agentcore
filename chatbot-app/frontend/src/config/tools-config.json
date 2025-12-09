@@ -207,63 +207,16 @@
       ]
     }
   ],
-  "agentcore_runtime_mcp": [
+  "agentcore_runtime_a2a": [
     {
-      "id": "agentcore_report-writer",
-      "name": "Report Writer",
-      "description": "Create comprehensive research reports with charts and DOCX export",
-      "category": "productivity",
-      "icon": "📝",
+      "id": "agentcore_research-agent",
+      "name": "Research Agent",
+      "description": "Web research and markdown report generation via A2A",
+      "category": "research",
+      "icon": "🔍",
       "enabled": false,
-      "isDynamic": true,
-      "endpoint_arn": "ssm:///mcp/endpoints/agentcore/report-writer",
-      "tools": [
-        {
-          "id": "agentcore_report-writer___create_report",
-          "name": "Create Report",
-          "description": "Create a new report with title and outline"
-        },
-        {
-          "id": "agentcore_report-writer___write_section",
-          "name": "Write Section",
-          "description": "Write a section with markdown content"
-        },
-        {
-          "id": "agentcore_report-writer___generate_chart",
-          "name": "Generate Chart",
-          "description": "Generate charts using Python code"
-        },
-        {
-          "id": "agentcore_report-writer___insert_chart",
-          "name": "Insert Chart",
-          "description": "Insert a generated chart into the report"
-        },
-        {
-          "id": "agentcore_report-writer___read_report",
-          "name": "Read Report",
-          "description": "Read the current report content"
-        },
-        {
-          "id": "agentcore_report-writer___replace_text",
-          "name": "Replace Text",
-          "description": "Find and replace text in the report"
-        },
-        {
-          "id": "agentcore_report-writer___get_outline",
-          "name": "Get Outline",
-          "description": "Get the report outline"
-        },
-        {
-          "id": "agentcore_report-writer___finalize_report",
-          "name": "Finalize Report",
-          "description": "Convert to DOCX and save to S3"
-        },
-        {
-          "id": "agentcore_report-writer___clear_report",
-          "name": "Clear Report",
-          "description": "Clear the current report"
-        }
-      ]
+      "isDynamic": false,
+      "runtime_arn_ssm": "/strands-agent-chatbot/dev/a2a/research-agent-runtime-arn"
     }
   ]
 }

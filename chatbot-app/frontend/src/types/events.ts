@@ -24,6 +24,7 @@ export interface ToolResultEvent {
   type: 'tool_result';
   toolUseId: string;
   result: string;
+  status?: string;
   images?: Array<{
     format: string;
     data: string;
@@ -56,68 +57,29 @@ export interface ErrorEvent {
   message: string;
 }
 
-export interface ToolProgressEvent {
-  type: 'tool_progress';
-  toolId: string;
-  sessionId: string;
-  step: string;
-  message: string;
-  progress?: number;
-  timestamp: string;
-  metadata?: Record<string, any>;
+export interface InterruptEvent {
+  type: 'interrupt';
+  interrupts: Array<{
+    id: string;
+    name: string;
+    reason?: {
+      tool_name?: string;
+      plan?: string;
+      plan_preview?: string;
+    };
+  }>;
 }
 
-export interface SpendingAnalysisStartEvent {
-  type: 'spending_analysis_start';
-  message: string;
-}
-
-export interface SpendingAnalysisStepEvent {
-  type: 'spending_analysis_step';
-  step_name: string;
-  step_description: string;
-  status: string;
-}
-
-export interface SpendingAnalysisResultEvent {
-  type: 'spending_analysis_result';
-  step_name: string;
-  result: string;
-}
-
-export interface SpendingAnalysisCompleteEvent {
-  type: 'spending_analysis_complete';
-  final_summary: string;
-}
-
-export interface SpendingAnalysisChartEvent {
-  type: 'spending_analysis_chart';
-  chart_id: string;
-  step_name: string;
-}
-
-export interface SpendingAnalysisProgressEvent {
-  type: 'spending_analysis_progress';
-  data: string;
-  session_id: string;
-}
-
-export type StreamEvent = 
-  | ReasoningEvent 
-  | ResponseEvent 
-  | ToolUseEvent 
+export type StreamEvent =
+  | ReasoningEvent
+  | ResponseEvent
+  | ToolUseEvent
   | ToolResultEvent
-  | InitEvent 
-  | ThinkingEvent 
-  | CompleteEvent 
+  | InitEvent
+  | ThinkingEvent
+  | CompleteEvent
   | ErrorEvent
-  | ToolProgressEvent
-  | SpendingAnalysisStartEvent
-  | SpendingAnalysisStepEvent
-  | SpendingAnalysisResultEvent
-  | SpendingAnalysisCompleteEvent
-  | SpendingAnalysisChartEvent
-  | SpendingAnalysisProgressEvent;
+  | InterruptEvent;
 
 // Chat state interfaces
 export interface ReasoningState {
@@ -130,30 +92,30 @@ export interface StreamingState {
   id: number;
 }
 
-export interface ToolProgressState {
-  context: string;
-  executor: string;
-  sessionId: string;
-  step: string;
-  message: string;
-  progress?: number;
-  timestamp: string;
-  metadata: Record<string, any>;
-  isActive: boolean;
+export interface InterruptState {
+  interrupts: Array<{
+    id: string;
+    name: string;
+    reason?: {
+      tool_name?: string;
+      plan?: string;
+      plan_preview?: string;
+    };
+  }>;
 }
 
 export interface ChatSessionState {
   reasoning: ReasoningState | null;
   streaming: StreamingState | null;
   toolExecutions: ToolExecution[];
-  toolProgress: ToolProgressState[];
   browserSession: {
     sessionId: string | null;
     browserId: string | null;
   } | null;
+  interrupt: InterruptState | null;
 }
 
-export type AgentStatus = 'idle' | 'thinking' | 'responding';
+export type AgentStatus = 'idle' | 'thinking' | 'responding' | 'researching';
 
 export interface LatencyMetrics {
   requestStartTime: number | null;

@@ -262,6 +262,21 @@ export class AgentRuntimeStack extends cdk.Stack {
       })
     )
 
+    // AgentCore A2A (Agent-to-Agent) Runtime Access
+    // Allow all bedrock-agentcore actions for A2A communication
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'A2ARuntimeAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:*',
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:*`,
+        ],
+      })
+    )
+
     // AgentCore Browser Access (System Browser for WebSocket connectivity)
     executionRole.addToPolicy(
       new iam.PolicyStatement({

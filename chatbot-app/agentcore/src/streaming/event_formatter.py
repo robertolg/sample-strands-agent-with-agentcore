@@ -268,6 +268,10 @@ class StreamEventFormatter:
         if result_images:
             tool_result_data["images"] = result_images
 
+        # Include status if present (e.g., "error" for cancelled tools)
+        if "status" in tool_result:
+            tool_result_data["status"] = tool_result["status"]
+
         # Include metadata if present (e.g., browserSessionId for Live View)
         if "metadata" in tool_result:
             tool_result_data["metadata"] = tool_result["metadata"]
@@ -279,7 +283,32 @@ class StreamEventFormatter:
     def _handle_tool_storage(tool_result: Dict[str, Any], result_text: str):
         """Tool storage handler - currently not used"""
         pass
-    
+
+    @staticmethod
+    def create_interrupt_event(interrupts: List[Any]) -> str:
+        """Create interrupt event for human-in-the-loop workflows
+
+        Args:
+            interrupts: List of Interrupt objects from Strands SDK
+
+        Returns:
+            SSE-formatted interrupt event
+        """
+        # Convert Interrupt objects to serializable dicts
+        interrupts_data = []
+        for interrupt in interrupts:
+            interrupt_dict = {
+                "id": interrupt.id,
+                "name": interrupt.name,
+                "reason": interrupt.reason if hasattr(interrupt, 'reason') else None
+            }
+            interrupts_data.append(interrupt_dict)
+
+        return StreamEventFormatter.format_sse_event({
+            "type": "interrupt",
+            "interrupts": interrupts_data
+        })
+
     @staticmethod
     def create_complete_event(message: str, images: List[Dict[str, str]] = None, usage: Dict[str, Any] = None) -> str:
         """Create completion event with optional token usage metrics"""
@@ -309,22 +338,6 @@ class StreamEventFormatter:
             "type": "thinking",
             "message": message
         })
-    
-    @staticmethod
-    def create_progress_event(progress_data: Dict[str, Any]) -> str:
-        """Create progress event for tool execution"""
-        return StreamEventFormatter.format_sse_event({
-            "type": "tool_progress",
-            "toolId": progress_data.get("toolId"),
-            "sessionId": progress_data.get("sessionId"),
-            "step": progress_data.get("step"),
-            "message": progress_data.get("message"),
-            "progress": progress_data.get("progress"),
-            "timestamp": progress_data.get("timestamp"),
-            "metadata": progress_data.get("metadata", {})
-        })
-    
-    
 
     @staticmethod
     def _get_tool_info(tool_use_id: str) -> Dict[str, Any]:

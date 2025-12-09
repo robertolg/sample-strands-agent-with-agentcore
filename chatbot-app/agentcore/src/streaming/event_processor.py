@@ -118,7 +118,7 @@ class StreamEventProcessor:
         
         return cleaned_text
 
-    async def process_stream(self, agent, message: str, file_paths: list = None, session_id: str = None) -> AsyncGenerator[str, None]:
+    async def process_stream(self, agent, message: str, file_paths: list = None, session_id: str = None, invocation_state: dict = None) -> AsyncGenerator[str, None]:
         """Process streaming events from agent with proper error handling and event separation"""
 
         # Store current session ID for tools to use
@@ -155,7 +155,11 @@ class StreamEventProcessor:
             # Initialize streaming
             yield self.formatter.create_init_event()
 
-            stream_iterator = agent.stream_async(multimodal_message)
+            # Pass invocation_state to agent for tool context access
+            if invocation_state:
+                stream_iterator = agent.stream_async(multimodal_message, invocation_state=invocation_state)
+            else:
+                stream_iterator = agent.stream_async(multimodal_message)
 
             # Note: Keepalive is handled at the router level (chat.py) via stream_with_keepalive wrapper
             async for event in stream_iterator:
@@ -175,6 +179,27 @@ class StreamEventProcessor:
                 # Handle final result
                 if "result" in event:
                     final_result = event["result"]
+
+                    # Check for interrupt (HITL - Human-in-the-loop)
+                    if hasattr(final_result, 'stop_reason') and final_result.stop_reason == "interrupt":
+                        if hasattr(final_result, 'interrupts') and final_result.interrupts:
+                            import logging
+                            logger = logging.getLogger(__name__)
+                            logger.info(f"🔔 Interrupt detected: {len(final_result.interrupts)} interrupt(s)")
+
+                            # Log interrupt details
+                            for interrupt in final_result.interrupts:
+                                logger.info(f"   Interrupt ID: {interrupt.id}, Name: {interrupt.name}")
+                                if hasattr(interrupt, 'reason'):
+                                    logger.info(f"   Reason: {interrupt.reason}")
+
+                            # Send interrupt event to frontend
+                            interrupt_event = self.formatter.create_interrupt_event(final_result.interrupts)
+                            logger.info(f"📤 Sending interrupt event to frontend: {interrupt_event[:200]}...")
+                            yield interrupt_event
+                            logger.info(f"✅ Interrupt event sent, closing stream")
+                            return
+
                     images, result_text = self.formatter.extract_final_result_data(final_result)
 
                     # Extract token usage from Strands SDK metrics

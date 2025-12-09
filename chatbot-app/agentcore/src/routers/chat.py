@@ -4,7 +4,7 @@ Implements AgentCore Runtime standard endpoints:
 - GET /ping (required)
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
@@ -113,6 +113,22 @@ async def invocations(request: InvocationRequest):
             logger.info(f"  - {file.filename} ({file.content_type})")
 
     try:
+        # Check if message contains interrupt response (HITL workflow)
+        interrupt_response_data = None
+        actual_message = input_data.message
+
+        try:
+            # Try to parse as JSON array (frontend sends interruptResponse this way)
+            parsed = json.loads(input_data.message)
+            if isinstance(parsed, list) and len(parsed) > 0:
+                first_item = parsed[0]
+                if isinstance(first_item, dict) and "interruptResponse" in first_item:
+                    interrupt_response_data = first_item["interruptResponse"]
+                    logger.info(f"🔔 Interrupt response detected: {interrupt_response_data}")
+        except (json.JSONDecodeError, TypeError, KeyError):
+            # Not a JSON interrupt response, treat as normal message
+            pass
+
         # Get agent instance with user-specific configuration
         # AgentCore Memory tracks preferences across sessions per user_id
         agent = get_agent(
@@ -125,13 +141,35 @@ async def invocations(request: InvocationRequest):
             caching_enabled=input_data.caching_enabled
         )
 
-        # Stream response from agent as SSE (with optional files)
-        return StreamingResponse(
-            agent.stream_async(
-                input_data.message,
+        # Prepare stream parameters
+        if interrupt_response_data:
+            # Resume agent with interrupt response
+            interrupt_id = interrupt_response_data.get("interruptId")
+            response = interrupt_response_data.get("response")
+            logger.info(f"🔄 Resuming agent with interrupt response: {interrupt_id} = {response}")
+
+            # Strands SDK expects a list of content blocks with interruptResponse
+            interrupt_prompt = [{
+                "interruptResponse": {
+                    "interruptId": interrupt_id,
+                    "response": response
+                }
+            }]
+            stream = agent.stream_async(
+                interrupt_prompt,
+                session_id=input_data.session_id
+            )
+        else:
+            # Normal message stream
+            stream = agent.stream_async(
+                actual_message,
                 session_id=input_data.session_id,
                 files=input_data.files
-            ),
+            )
+
+        # Stream response from agent as SSE
+        return StreamingResponse(
+            stream,
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -161,6 +199,22 @@ async def chat_stream(request: ChatRequest):
     logger.info(f"Legacy chat request - Session: {request.session_id}, Message: {request.message[:50]}...")
 
     try:
+        # Check if message contains interrupt response (HITL workflow)
+        interrupt_response_data = None
+        actual_message = request.message
+
+        try:
+            # Try to parse as JSON array (frontend sends interruptResponse this way)
+            parsed = json.loads(request.message)
+            if isinstance(parsed, list) and len(parsed) > 0:
+                first_item = parsed[0]
+                if isinstance(first_item, dict) and "interruptResponse" in first_item:
+                    interrupt_response_data = first_item["interruptResponse"]
+                    logger.info(f"🔔 Interrupt response detected: {interrupt_response_data}")
+        except (json.JSONDecodeError, TypeError, KeyError):
+            # Not a JSON interrupt response, treat as normal message
+            pass
+
         # Get agent instance (with or without tool filtering)
         agent = get_agent(
             session_id=request.session_id,
@@ -170,13 +224,41 @@ async def chat_stream(request: ChatRequest):
         # Wrap stream to ensure flush on disconnect and prevent further processing
         async def stream_with_cleanup():
             client_disconnected = False
-            stream_iterator = agent.stream_async(request.message, session_id=request.session_id)
+
+            # If this is an interrupt response, resume agent with it
+            if interrupt_response_data:
+                interrupt_id = interrupt_response_data.get("interruptId")
+                response = interrupt_response_data.get("response")
+                logger.info(f"🔄 Resuming agent with interrupt response: {interrupt_id} = {response}")
+
+                # Resume the agent by providing interrupt response as prompt
+                # Strands SDK expects a list of content blocks with interruptResponse
+                interrupt_prompt = [{
+                    "interruptResponse": {
+                        "interruptId": interrupt_id,
+                        "response": response
+                    }
+                }]
+                stream_iterator = agent.stream_async(interrupt_prompt, session_id=request.session_id)
+            else:
+                # Normal message
+                stream_iterator = agent.stream_async(actual_message, session_id=request.session_id)
 
             try:
                 async for event in stream_iterator:
-                    if client_disconnected:
-                        # Client already disconnected, don't yield more events
+                    # Check if client disconnected before yielding
+                    if await request.is_disconnected():
+                        client_disconnected = True
+                        logger.info(f"🔌 Client disconnected during streaming for session {request.session_id}")
+                        # CRITICAL: Flush before breaking to save completed work
+                        if hasattr(agent.session_manager, 'flush'):
+                            try:
+                                agent.session_manager.flush()
+                                logger.info(f"💾 Flushed buffered messages before break (client disconnected)")
+                            except Exception as flush_error:
+                                logger.error(f"Failed to flush before break: {flush_error}")
                         break
+
                     yield event
             except asyncio.CancelledError:
                 # Client disconnected (e.g., stop button clicked)

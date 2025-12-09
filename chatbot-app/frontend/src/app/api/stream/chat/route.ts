@@ -96,20 +96,13 @@ export async function POST(request: NextRequest) {
         tags: [],
       }
 
-      // Create session in storage
-      if (userId === 'anonymous') {
-        if (IS_LOCAL) {
-          const { upsertSession } = await import('@/lib/local-session-store')
-          upsertSession(userId, sessionId, sessionData)
-        }
+      // Create session in storage for all users (including anonymous in AWS)
+      if (IS_LOCAL) {
+        const { upsertSession } = await import('@/lib/local-session-store')
+        upsertSession(userId, sessionId, sessionData)
       } else {
-        if (IS_LOCAL) {
-          const { upsertSession } = await import('@/lib/local-session-store')
-          upsertSession(userId, sessionId, sessionData)
-        } else {
-          const { upsertSession: upsertDynamoSession } = await import('@/lib/dynamodb-client')
-          await upsertDynamoSession(userId, sessionId, sessionData)
-        }
+        const { upsertSession: upsertDynamoSession } = await import('@/lib/dynamodb-client')
+        await upsertDynamoSession(userId, sessionId, sessionData)
       }
     }
 
@@ -119,12 +112,12 @@ export async function POST(request: NextRequest) {
     if (enabled_tools && Array.isArray(enabled_tools)) {
       enabledToolsList = enabled_tools
     } else {
-      // Load enabled tools for all users (including anonymous)
+      // Load enabled tools for all users (including anonymous in AWS)
       if (IS_LOCAL) {
         const { getUserEnabledTools } = await import('@/lib/local-tool-store')
         enabledToolsList = getUserEnabledTools(userId)
-      } else if (userId !== 'anonymous') {
-        // DynamoDB only for authenticated users
+      } else {
+        // DynamoDB for all users including anonymous
         const { getUserEnabledTools } = await import('@/lib/dynamodb-client')
         enabledToolsList = await getUserEnabledTools(userId)
       }
@@ -357,19 +350,13 @@ export async function POST(request: NextRequest) {
                 },
               }
 
-              if (userId === 'anonymous') {
-                if (IS_LOCAL) {
-                  const { updateSession } = await import('@/lib/local-session-store')
-                  updateSession(userId, sessionId, updates)
-                }
+              // Save session metadata for all users (including anonymous in AWS)
+              if (IS_LOCAL) {
+                const { updateSession } = await import('@/lib/local-session-store')
+                updateSession(userId, sessionId, updates)
               } else {
-                if (IS_LOCAL) {
-                  const { updateSession } = await import('@/lib/local-session-store')
-                  updateSession(userId, sessionId, updates)
-                } else {
-                  const { updateSession: updateDynamoSession } = await import('@/lib/dynamodb-client')
-                  await updateDynamoSession(userId, sessionId, updates)
-                }
+                const { updateSession: updateDynamoSession } = await import('@/lib/dynamodb-client')
+                await updateDynamoSession(userId, sessionId, updates)
               }
             }
           } catch (updateError) {

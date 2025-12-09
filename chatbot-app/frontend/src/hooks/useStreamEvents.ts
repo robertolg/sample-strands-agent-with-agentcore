@@ -1,6 +1,6 @@
 import { useCallback, useRef } from 'react'
 import { Message, ToolExecution } from '@/types/chat'
-import { StreamEvent, ChatSessionState, ChatUIState, ToolProgressState } from '@/types/events'
+import { StreamEvent, ChatSessionState, ChatUIState } from '@/types/events'
 import { useLatencyTracking } from './useLatencyTracking'
 import { fetchAuthSession } from 'aws-amplify/auth'
 import { updateLastActivity } from '@/config/session'
@@ -116,6 +116,15 @@ export const useStreamEvents = ({
 
   const handleToolUseEvent = useCallback((data: StreamEvent) => {
     if (data.type === 'tool_use') {
+      // Tool execution started - update agent status
+      const isResearchAgent = data.name === 'research_agent'
+
+      setUIState(prev => ({
+        ...prev,
+        isTyping: true,
+        agentStatus: isResearchAgent ? 'researching' : 'responding'  // Keep responding for non-research tools
+      }))
+
       // Finalize current streaming message before adding tool
       // This separates pre-tool response from post-tool response
       if (streamingStartedRef.current && streamingIdRef.current) {
@@ -200,14 +209,15 @@ export const useStreamEvents = ({
         }])
       }
     }
-  }, [availableTools, currentToolExecutionsRef, currentTurnIdRef, setSessionState, setMessages, uiState])
+  }, [availableTools, currentToolExecutionsRef, currentTurnIdRef, setSessionState, setMessages, setUIState, uiState])
 
   const handleToolResultEvent = useCallback((data: StreamEvent) => {
     if (data.type === 'tool_result') {
       // Update tool execution with result
+      const isCancelled = data.status === 'error'
       const updatedExecutions = currentToolExecutionsRef.current.map(tool =>
         tool.id === data.toolUseId
-          ? { ...tool, toolResult: data.result, images: data.images, isComplete: true }
+          ? { ...tool, toolResult: data.result, images: data.images, isComplete: true, isCancelled }
           : tool
       )
 
@@ -332,12 +342,23 @@ export const useStreamEvents = ({
           }
         }))
 
-        setMessages(prevMsgs => prevMsgs.map(msg =>
-          msg.id === messageId
+        setMessages(prevMsgs => {
+          // Find the last assistant message (could be text or tool message)
+          let lastAssistantIndex = -1
+          for (let i = prevMsgs.length - 1; i >= 0; i--) {
+            if (prevMsgs[i].sender === 'bot') {
+              lastAssistantIndex = i
+              break
+            }
+          }
+
+          return prevMsgs.map((msg, index) =>
+          // Update either the streaming message or the last assistant message (for tools)
+          msg.id === messageId || (index === lastAssistantIndex && messageId)
             ? {
                 ...msg,
                 isStreaming: false,
-                images: data.images || [],
+                images: data.images || msg.images || [],
                 latencyMetrics: {
                   timeToFirstToken: ttftValue,
                   endToEndLatency: e2eValue
@@ -345,7 +366,8 @@ export const useStreamEvents = ({
                 ...(data.usage && { tokenUsage: data.usage })
               }
             : msg
-        ))
+          )
+        })
       } else {
         // No streaming message, just update UI state
         setUIState(prev => {
@@ -370,8 +392,8 @@ export const useStreamEvents = ({
         reasoning: null,
         streaming: null,
         toolExecutions: [],
-        toolProgress: [],
-        browserSession: prev.browserSession  // Preserve browser session
+        browserSession: prev.browserSession,  // Preserve browser session
+        interrupt: null
       }))
 
       // Reset refs for next message
@@ -384,72 +406,19 @@ export const useStreamEvents = ({
 
   const handleInitEvent = useCallback(() => {
     setUIState(prev => {
-      // Only transition to 'thinking' if starting a new turn (idle -> thinking)
-      // Once 'responding' starts, stay in 'responding' until complete
-      if (prev.agentStatus === 'idle') {
-        if (prev.latencyMetrics.requestStartTime) {
-          latencyTracking.startTracking(prev.latencyMetrics.requestStartTime)
-        }
-        return { ...prev, isTyping: true, agentStatus: 'thinking' }
+      // Don't change status if already in an active state (not idle)
+      // This includes 'thinking', 'responding', and 'researching'
+      if (prev.agentStatus !== 'idle') {
+        return prev
       }
-      // Already active - keep current status
-      return prev
+
+      // Only transition to 'thinking' if starting a new turn (idle -> thinking)
+      if (prev.latencyMetrics.requestStartTime) {
+        latencyTracking.startTracking(prev.latencyMetrics.requestStartTime)
+      }
+      return { ...prev, isTyping: true, agentStatus: 'thinking' }
     })
   }, [setUIState, latencyTracking])
-
-
-  const handleProgressEvent = useCallback((data: StreamEvent) => {
-    if (data.type === 'tool_progress') {
-      const progressState: ToolProgressState = {
-        context: data.toolId, // Map toolId to context for compatibility
-        executor: 'tool-executor',
-        sessionId: data.sessionId,
-        step: data.step,
-        message: data.message,
-        progress: data.progress,
-        timestamp: data.timestamp,
-        metadata: data.metadata || {},
-        isActive: data.step !== 'completed' && data.step !== 'error'
-      }
-
-      setSessionState(prev => {
-        // Find existing progress for this tool
-        const existingIndex = prev.toolProgress.findIndex(p => p.context === data.toolId && p.sessionId === data.sessionId)
-        
-        if (existingIndex >= 0) {
-          // Update existing progress
-          const updatedProgress = [...prev.toolProgress]
-          updatedProgress[existingIndex] = progressState
-          return { ...prev, toolProgress: updatedProgress }
-        } else {
-          // Add new progress
-          return { ...prev, toolProgress: [...prev.toolProgress, progressState] }
-        }
-      })
-
-      // Show progress panel when tool starts or has active progress
-      if (data.step === 'connecting' || data.step === 'fetching' || data.step === 'processing') {
-        setUIState(prev => ({ ...prev, showProgressPanel: true }))
-      }
-
-      // Auto-hide progress panel after completion (with delay)
-      if (data.step === 'completed' || data.step === 'error') {
-        setTimeout(() => {
-          setSessionState(prev => ({
-            ...prev,
-            toolProgress: prev.toolProgress.filter(p => p.isActive)
-          }))
-          
-          // Hide panel if no active progress
-          setUIState(prev => {
-            const hasActiveProgress = prev.showProgressPanel && 
-              sessionState.toolProgress.some(p => p.isActive)
-            return { ...prev, showProgressPanel: hasActiveProgress }
-          })
-        }, 3000) // Hide after 3 seconds
-      }
-    }
-  }, [setSessionState, setUIState, sessionState.toolProgress])
 
   const handleErrorEvent = useCallback((data: StreamEvent) => {
     if (data.type === 'error') {
@@ -482,7 +451,7 @@ export const useStreamEvents = ({
           }
         }
       })
-      setSessionState({ reasoning: null, streaming: null, toolExecutions: [], toolProgress: [], browserSession: null })
+      setSessionState({ reasoning: null, streaming: null, toolExecutions: [], browserSession: null, interrupt: null })
 
       // Reset refs on error
       streamingStartedRef.current = false
@@ -491,6 +460,26 @@ export const useStreamEvents = ({
       latencyTracking.reset()
     }
   }, [uiState, setMessages, setUIState, setSessionState, streamingStartedRef, streamingIdRef, completeProcessedRef, latencyTracking])
+
+  const handleInterruptEvent = useCallback((data: StreamEvent) => {
+    if (data.type === 'interrupt') {
+      console.log('[Interrupt] Received interrupt event:', data)
+
+      setSessionState(prev => ({
+        ...prev,
+        interrupt: {
+          interrupts: data.interrupts
+        }
+      }))
+
+      // Transition to idle status (waiting for user input)
+      setUIState(prev => ({
+        ...prev,
+        isTyping: false,
+        agentStatus: 'idle'
+      }))
+    }
+  }, [setSessionState, setUIState])
 
   const handleStreamEvent = useCallback((event: StreamEvent) => {
     switch (event.type) {
@@ -506,9 +495,6 @@ export const useStreamEvents = ({
       case 'tool_result':
         handleToolResultEvent(event)
         break
-      case 'tool_progress':
-        handleProgressEvent(event)
-        break
       case 'complete':
         handleCompleteEvent(event)
         break
@@ -519,17 +505,19 @@ export const useStreamEvents = ({
       case 'error':
         handleErrorEvent(event)
         break
-      // spending_analysis_* events removed - now handled by useAnalysisStream
+      case 'interrupt':
+        handleInterruptEvent(event)
+        break
     }
   }, [
     handleReasoningEvent,
     handleResponseEvent,
     handleToolUseEvent,
     handleToolResultEvent,
-    handleProgressEvent,
     handleCompleteEvent,
     handleInitEvent,
-    handleErrorEvent
+    handleErrorEvent,
+    handleInterruptEvent
   ])
 
   return { handleStreamEvent }

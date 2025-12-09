@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Message, Tool, ToolExecution } from '@/types/chat'
-import { ReasoningState, ChatSessionState, ChatUIState, ToolProgressState } from '@/types/events'
+import { ReasoningState, ChatSessionState, ChatUIState, InterruptState, AgentStatus } from '@/types/events'
 import { detectBackendUrl } from '@/utils/chat'
 import { useStreamEvents } from './useStreamEvents'
 import { useChatAPI, SessionPreferences } from './useChatAPI'
@@ -25,11 +25,10 @@ interface UseChatReturn {
   setInputMessage: (message: string) => void
   isConnected: boolean
   isTyping: boolean
-  agentStatus: 'idle' | 'thinking' | 'responding'
+  agentStatus: AgentStatus
   availableTools: Tool[]
   currentToolExecutions: ToolExecution[]
   currentReasoning: ReasoningState | null
-  toolProgress: ToolProgressState[]
   showProgressPanel: boolean
   toggleProgressPanel: () => void
   sendMessage: (e: React.FormEvent, files?: File[]) => Promise<void>
@@ -41,6 +40,8 @@ interface UseChatReturn {
   loadSession: (sessionId: string) => Promise<void>
   onGatewayToolsChange: (enabledToolIds: string[]) => void
   browserSession: { sessionId: string | null; browserId: string | null } | null
+  respondToInterrupt: (interruptId: string, response: string) => Promise<void>
+  currentInterrupt: InterruptState | null
 }
 
 export const useChat = (props?: UseChatProps): UseChatReturn => {
@@ -54,8 +55,8 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     reasoning: null,
     streaming: null,
     toolExecutions: [],
-    toolProgress: [],
-    browserSession: null
+    browserSession: null,
+    interrupt: null
   })
   
   const [uiState, setUIState] = useState<ChatUIState>({
@@ -86,20 +87,6 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     }
     initBackend()
   }, [])
-
-  // Clear progress states on page refresh/reload
-  useEffect(() => {
-    const isPageRefresh = typeof window !== 'undefined' && 
-      (window.performance?.navigation?.type === 1 || 
-       (window.performance?.getEntriesByType('navigation')?.[0] as any)?.type === 'reload');
-    
-    if (isPageRefresh) {
-      setSessionState(prev => ({ 
-        ...prev, 
-        toolProgress: [] 
-      }));
-    }
-  }, []);
 
   const handleLegacyEvent = useCallback((data: any) => {
     switch (data.type) {
@@ -174,9 +161,162 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     selectedPromptId: 'general',
   }
 
+  // Polling for ongoing tool executions
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const isPollingActiveRef = useRef(false)
+
+  const startPollingForOngoingTools = useCallback((sessionId: string) => {
+    // Clear any existing polling
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current)
+    }
+
+    console.log('[useChat] Starting polling for ongoing tool executions')
+    isPollingActiveRef.current = true
+
+    const poll = async () => {
+      try {
+        console.log('[useChat] Polling: reloading session...')
+        await apiLoadSession(sessionId)
+      } catch (error) {
+        console.error('[useChat] Polling error:', error)
+      }
+    }
+
+    // Initial check
+    poll()
+
+    // Poll every 5 seconds
+    pollingIntervalRef.current = setInterval(poll, 5000)
+  }, [apiLoadSession])
+
+  // Monitor messages for ongoing tools (separate effect)
+  useEffect(() => {
+    const hasOngoingTools = messages.some(msg =>
+      msg.toolExecutions &&
+      msg.toolExecutions.some(te => !te.isComplete)
+    )
+
+    const hasOngoingResearch = messages.some(msg =>
+      msg.toolExecutions &&
+      msg.toolExecutions.some(te => !te.isComplete && !te.isCancelled && te.toolName === 'research_agent')
+    )
+
+    // Check if there's a completed tool but missing final assistant response
+    // This happens when tool_result is saved but agent hasn't generated final text response yet
+    let hasCompletedToolAwaitingResponse = false
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]
+
+      // If we find a tool execution that's complete
+      if (msg.toolExecutions && msg.toolExecutions.some(te => te.isComplete)) {
+        // Check if there's any assistant message with text after this
+        const hasFollowupResponse = messages.slice(i + 1).some(
+          laterMsg => laterMsg.sender === 'bot' && laterMsg.text && laterMsg.text.trim()
+        )
+
+        if (!hasFollowupResponse) {
+          hasCompletedToolAwaitingResponse = true
+          console.log('[useChat] Found completed tool without followup assistant response')
+        }
+        break
+      }
+    }
+
+    // Always update UI if there's ongoing research (even if polling not started yet)
+    if (hasOngoingResearch) {
+      setUIState(prev => {
+        if (prev.agentStatus !== 'researching') {
+          console.log('[useChat] Setting status to researching')
+          return {
+            ...prev,
+            isTyping: true,
+            agentStatus: 'researching'
+          }
+        }
+        return prev
+      })
+    }
+    // If polling is active and all tools complete AND agent has responded, stop polling
+    else if (isPollingActiveRef.current && !hasOngoingTools && !hasCompletedToolAwaitingResponse) {
+      console.log('[useChat] All tool executions complete and agent responded, stopping polling')
+
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current)
+        pollingIntervalRef.current = null
+      }
+
+      isPollingActiveRef.current = false
+
+      // Reset UI state when complete
+      setUIState(prev => ({
+        ...prev,
+        isTyping: false,
+        agentStatus: 'idle'
+      }))
+    }
+    // If there's a completed tool waiting for response, keep polling
+    else if (hasCompletedToolAwaitingResponse && !isPollingActiveRef.current) {
+      console.log('[useChat] Completed tool awaiting response, continuing to poll')
+      // Don't stop polling, keep waiting for final response
+    }
+  }, [messages, setUIState])
+
+  const stopPolling = useCallback(() => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current)
+      pollingIntervalRef.current = null
+      isPollingActiveRef.current = false
+      console.log('[useChat] Polling stopped')
+    }
+  }, [])
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      stopPolling()
+    }
+  }, [stopPolling])
+
   // Wrapper for loadSession that restores session preferences (model, tools)
   const loadSessionWithPreferences = useCallback(async (newSessionId: string) => {
+    // Stop any existing polling from previous session
+    stopPolling()
+
+    // Reset UI and session state when loading a different session
+    setUIState(prev => ({
+      ...prev,
+      isTyping: false,
+      agentStatus: 'idle',
+      showProgressPanel: false
+    }))
+
+    setSessionState({
+      reasoning: null,
+      streaming: null,
+      toolExecutions: [],
+      browserSession: null,
+      interrupt: null
+    })
+
     const preferences = await apiLoadSession(newSessionId)
+
+    // Check if there are ongoing tool executions after loading
+    setTimeout(() => {
+      setMessages(currentMessages => {
+        const hasOngoingTools = currentMessages.some(msg =>
+          msg.toolExecutions &&
+          msg.toolExecutions.some(te => !te.isComplete)
+        )
+
+        if (hasOngoingTools) {
+          console.log('[useChat] Detected ongoing tool executions, starting polling')
+          startPollingForOngoingTools(newSessionId)
+        }
+
+        return currentMessages
+      })
+    }, 100)
 
     // Merge saved preferences with defaults (field-by-field fallback)
     // This handles cases where old sessions have partial or missing preferences
@@ -222,7 +362,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     } catch (error) {
       console.warn('[useChat] Failed to activate prompt:', error)
     }
-  }, [apiLoadSession, setAvailableTools])
+  }, [apiLoadSession, setAvailableTools, setUIState, setSessionState, stopPolling, startPollingForOngoingTools])
 
   // Function to clear stored progress events
   const clearProgressEvents = useCallback(async () => {
@@ -373,7 +513,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
 
     const success = await apiNewChat()
     if (success) {
-      setSessionState({ reasoning: null, streaming: null, toolExecutions: [], toolProgress: [], browserSession: null })
+      setSessionState({ reasoning: null, streaming: null, toolExecutions: [], browserSession: null, interrupt: null })
       setUIState(prev => ({ ...prev, isTyping: false }))
       // Clear messages to start fresh
       setMessages([])
@@ -383,6 +523,46 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
       }
     }
   }, [apiNewChat, setMessages, sessionId])
+
+  const respondToInterrupt = useCallback(async (interruptId: string, response: string) => {
+    if (!sessionState.interrupt) return
+
+    // Clear interrupt state
+    setSessionState(prev => ({ ...prev, interrupt: null }))
+
+    // Determine if this is research agent interrupt
+    const isResearchInterrupt = sessionState.interrupt.interrupts.some(
+      int => int.reason?.tool_name === 'research_agent'
+    )
+
+    // Set appropriate status: 'researching' for research agent, 'thinking' for others
+    setUIState(prev => ({
+      ...prev,
+      isTyping: true,
+      agentStatus: isResearchInterrupt ? 'researching' : 'thinking'
+    }))
+
+    // Send interrupt response to backend (similar to sendMessage but with interruptResponse)
+    try {
+      await apiSendMessage(
+        JSON.stringify([{
+          interruptResponse: {
+            interruptId,
+            response
+          }
+        }]),
+        undefined, // no files
+        undefined, // onSuccess
+        (error) => {
+          console.error('[Interrupt] Error sending interrupt response:', error)
+          setUIState(prev => ({ ...prev, isTyping: false, agentStatus: 'idle' }))
+        }
+      )
+    } catch (error) {
+      console.error('[Interrupt] Failed to respond to interrupt:', error)
+      setUIState(prev => ({ ...prev, isTyping: false, agentStatus: 'idle' }))
+    }
+  }, [sessionState.interrupt, apiSendMessage, setSessionState, setUIState])
 
   const sendMessage = useCallback(async (e: React.FormEvent, files?: File[]) => {
     e.preventDefault()
@@ -424,8 +604,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
       ...prev,
       reasoning: null,
       streaming: null,
-      toolExecutions: [],
-      toolProgress: []
+      toolExecutions: []
     }))
 
     // Reset ref as well
@@ -442,7 +621,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
       },
       (error) => {
         // Error callback
-        setSessionState({ reasoning: null, streaming: null, toolExecutions: [], toolProgress: [], browserSession: null })
+        setSessionState({ reasoning: null, streaming: null, toolExecutions: [], browserSession: null, interrupt: null })
       }
     )
   }, [inputMessage, apiSendMessage])
@@ -546,7 +725,6 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     availableTools,
     currentToolExecutions: sessionState.toolExecutions,
     currentReasoning: sessionState.reasoning,
-    toolProgress: sessionState.toolProgress,
     showProgressPanel: uiState.showProgressPanel,
     toggleProgressPanel,
     sendMessage,
@@ -557,6 +735,8 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     sessionId,
     loadSession: loadSessionWithPreferences,
     onGatewayToolsChange: handleGatewayToolsChange,
-    browserSession: sessionState.browserSession
+    browserSession: sessionState.browserSession,
+    respondToInterrupt,
+    currentInterrupt: sessionState.interrupt
   }
 }

@@ -348,9 +348,7 @@ export const useChatAPI = ({
               
               // Handle new simplified events
               if (eventData.type && [
-                'text', 'reasoning', 'response', 'tool_use', 'tool_result', 'tool_progress', 'complete', 'init', 'thinking', 'error',
-                'spending_analysis_start', 'spending_analysis_step', 'spending_analysis_result',
-                'spending_analysis_progress', 'spending_analysis_complete', 'spending_analysis_chart'
+                'text', 'reasoning', 'response', 'tool_use', 'tool_result', 'tool_progress', 'complete', 'init', 'thinking', 'error', 'interrupt'
               ].includes(eventData.type)) {
                 handleStreamEvent(eventData as StreamEvent)
               } else {

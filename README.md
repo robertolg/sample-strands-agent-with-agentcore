@@ -14,6 +14,7 @@ Combines Strands Agent orchestration with AWS Bedrock AgentCore services:
 - **AgentCore Code Interpreter**: Built-in code execution for data analysis, visualization, and chart generation
 - **AgentCore Browser**: Web automation via headless browser with live view streaming
 - **Amazon Nova Act**: Agentic foundation model for browser automation with visual reasoning
+- **A2A Protocol**: Agent-to-Agent communication enabling Chat Agent and Research Agent to collaborate seamlessly
 
 **Quick Links:** [📸 UI Preview](#ui-preview) | [📹 Demo Videos](#demo-videos)
 
@@ -79,10 +80,10 @@ Combines Strands Agent orchestration with AWS Bedrock AgentCore services:
 
 ## Demo Videos
 
-| Finance Assistant | Browser Automation | Academic Research |
-|:---:|:---:|:---:|
-| [<img src="docs/images/demo-finance.png" width="280">](https://drive.google.com/file/d/1QQyaBWwzNOiLWe5LKZrSZoN68t7gsJdO/view?usp=sharing) | [<img src="docs/images/demo-browser.png" width="280">](https://drive.google.com/file/d/1lPJGStD_YMWdF4a_k9ca_Kr-mah5yBnj/view?usp=sharing) | [<img src="docs/images/demo-academic.png" width="280">](https://drive.google.com/file/d/1FliAGRSMFBh41m5xZe2mNpSmLtu_T1yN/view?usp=sharing) |
-| *Stock analysis, market news* | *Web automation with Nova Act* | *Research papers via ArXiv & Wikipedia* |
+| Finance Assistant | Browser Automation | Academic Research | Deep Research (Multi Agent) |
+|:---:|:---:|:---:|:---:|
+| [<img src="docs/images/demo-finance.png" width="210">](https://drive.google.com/file/d/1QQyaBWwzNOiLWe5LKZrSZoN68t7gsJdO/view?usp=sharing) | [<img src="docs/images/demo-browser.png" width="210">](https://drive.google.com/file/d/1lPJGStD_YMWdF4a_k9ca_Kr-mah5yBnj/view?usp=sharing) | [<img src="docs/images/demo-academic.png" width="210">](https://drive.google.com/file/d/1FliAGRSMFBh41m5xZe2mNpSmLtu_T1yN/view?usp=sharing) | [<img src="docs/images/research-agent.png" width="210">](https://drive.google.com/file/d/19lnw04LZDpK9D99bE-nqC37KTy3ML9zE/view?usp=sharing) |
+| *Stock analysis, market news* | *Web automation with Nova Act* | *Research papers via ArXiv & Wikipedia* | *Supervisor-Worker pattern via A2A* |
 
 ## Key Technical Features
 
@@ -104,9 +105,9 @@ Tools communicate via different protocols based on their characteristics:
 | **Local Tools** | Direct function calls | 5 | Weather, Web Search, Visualization | N/A |
 | **Built-in Tools** | AWS SDK + WebSocket | 4 | AgentCore Code Interpreter, Browser (Nova Act) | IAM |
 | **Gateway Tools** | MCP + SigV4 | 12 | Wikipedia, ArXiv, Finance (Lambda) | AWS SigV4 |
-| **Runtime Tools** | A2A protocol | 9 | Report Writer | AgentCore auth |
+| **A2A Tools** | A2A protocol | 1 | Research Agent | AWS SigV4 |
 
-Status: 21 tools ✅ / 9 tools 🚧. See [Implementation Details](#multi-protocol-tool-architecture) for complete tool list.
+Status: 22 tools ✅. See [Implementation Details](#multi-protocol-tool-architecture) for complete tool list.
 
 **3. Multi-Model Selection**
 
@@ -132,6 +133,27 @@ Native support for visual and document content:
 
 Combines session-based conversation history (short-term) with namespaced user preferences and facts (long-term) stored in AgentCore Memory, enabling cross-session context retention with relevance-scored retrieval per user.
 
+**8. Multi-agent Architecture**
+
+The system implements a **Supervisor-Worker pattern** using A2A (Agent-to-Agent) protocol, enabling specialized agents to handle complex tasks independently while maintaining human oversight.
+
+### Example: Research Agent Workflow
+
+<img src="docs/images/multi-agent-architecture.svg" alt="Multi-agent Architecture" width="800">
+
+**Key Components:**
+
+- **Supervisor Agent**: Main conversational interface that plans tasks, requests user approval, and delegates to specialized agents
+- **Research Agent (A2A)**: Autonomous research specialist that executes approved plans using web search, Wikipedia, and generates markdown reports with charts
+- **Human-in-the-Loop**: Strands Interrupt mechanism for user approval before delegating tasks
+- **A2A Protocol**: AgentCore-managed communication enabling seamless cross-agent collaboration
+
+**Benefits:**
+- **Modularity**: Add specialized agents without modifying the supervisor
+- **Human Control**: Approval workflow ensures oversight of autonomous operations
+- **Scalability**: Each agent runs on independent AgentCore Runtime
+- **Flexibility**: Agents can be updated, scaled, or replaced independently
+
 ## Implementation Details
 
 ### Multi-Protocol Tool Architecture
@@ -155,17 +177,17 @@ See [docs/TOOLS.md](docs/TOOLS.md) for detailed tool specifications.
 | Google Search (2 tools) | MCP + SigV4 | Yes | ✅ | Web and image search |
 | Tavily AI (2 tools) | MCP + SigV4 | Yes | ✅ | AI-powered search and extraction |
 | Financial Market (4 tools) | MCP + SigV4 | No | ✅ | Stock quotes, history, news, analysis (Yahoo Finance) |
-| **Runtime Tools** | | | | |
-| Report Writer (9 tools) | A2A | No | 🚧 | Multi-section research reports with charts |
+| **A2A Tools** | | | | |
+| Research Agent | A2A protocol | No | ✅ | Comprehensive web research with markdown reports and citations |
 
 **Protocol Details:**
 - **Direct call**: Python function with `@tool` decorator, executed in runtime container
 - **AWS SDK**: Bedrock client API calls (AgentCore Code Interpreter, AgentCore Browser)
 - **WebSocket**: Real-time bidirectional communication for browser automation
 - **MCP + SigV4**: Model Context Protocol with AWS SigV4 authentication
-- **A2A**: Agent-to-Agent protocol for runtime-to-runtime communication
+- **A2A protocol**: Agent-to-Agent communication with AWS SigV4 authentication for runtime-to-runtime collaboration
 
-**Total: 30 tools** (21 ✅ / 9 🚧)
+**Total: 22 tools** (22 ✅)
 
 ### Dynamic Tool Filtering
 
@@ -389,8 +411,8 @@ User → CloudFront → ALB → Frontend+BFF (Fargate)
             ┌─────────────────┼─────────────────┐
             │                 │                 │
             ↓ SigV4           ↓ A2A             ↓ AWS SDK
-     AgentCore Gateway   Report Writer     Built-in Tools
-     (MCP endpoints)     Runtime 🚧        (Code Interpreter,
+     AgentCore Gateway   Research Agent    Built-in Tools
+     (MCP endpoints)     Runtime ✅        (Code Interpreter,
             ↓                               Browser + Nova Act)
      Lambda Functions (5x)
      └─ Wikipedia, ArXiv,

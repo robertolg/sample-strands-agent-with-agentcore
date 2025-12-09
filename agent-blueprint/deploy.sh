@@ -362,9 +362,9 @@ deploy_agentcore_runtime_a2a() {
     # Check which A2A agents are available
     AVAILABLE_SERVERS=()
 
-    if [ -d "agentcore-runtime-a2a-stack/report-writer" ]; then
-        AVAILABLE_SERVERS+=("report-writer")
-        echo "  1) report-writer     (Research report creation with charts via A2A)"
+    if [ -d "agentcore-runtime-a2a-stack/research-agent" ]; then
+        AVAILABLE_SERVERS+=("research-agent")
+        echo "  1) research-agent    (Web research and markdown report generation via A2A)"
     fi
 
     if [ -d "archives/agentcore-mcp-farm/document-writer" ]; then
@@ -387,10 +387,10 @@ deploy_agentcore_runtime_a2a() {
 
     case $MCP_OPTION in
         1)
-            if [[ " ${AVAILABLE_SERVERS[@]} " =~ " report-writer " ]]; then
-                deploy_report_writer
+            if [[ " ${AVAILABLE_SERVERS[@]} " =~ " research-agent " ]]; then
+                deploy_research_agent
             else
-                log_error "report-writer not found"
+                log_error "research-agent not found"
                 exit 1
             fi
             ;;
@@ -415,8 +415,8 @@ deploy_agentcore_runtime_a2a() {
             echo ""
             for server in "${AVAILABLE_SERVERS[@]}"; do
                 case $server in
-                    "report-writer")
-                        deploy_report_writer
+                    "research-agent")
+                        deploy_research_agent
                         ;;
                     "document-writer")
                         deploy_document_writer
@@ -441,31 +441,33 @@ deploy_agentcore_runtime_a2a() {
     esac
 }
 
-# Deploy Report Writer
-deploy_report_writer() {
-    log_step "Deploying Report Writer A2A Agent..."
+# Deploy Research Agent
+deploy_research_agent() {
+    log_step "Deploying Research Agent A2A Agent..."
     echo ""
 
-    cd agentcore-runtime-a2a-stack/report-writer
+    cd agentcore-runtime-a2a-stack/research-agent
 
     # Check if deploy script exists
     if [ ! -f "deploy.sh" ]; then
-        log_error "deploy.sh not found in report-writer"
+        log_error "deploy.sh not found in research-agent"
         exit 1
     fi
 
     # Make script executable
     chmod +x deploy.sh
 
-    # Export AWS region
+    # Export environment variables for the deployment script
     export AWS_REGION
+    export PROJECT_NAME="strands-agent-chatbot"
+    export ENVIRONMENT="dev"
 
     # Run deployment
     ./deploy.sh
 
     cd ../..
 
-    log_info "Report Writer A2A agent deployment complete!"
+    log_info "Research Agent A2A agent deployment complete!"
 }
 
 # Deploy Document Writer

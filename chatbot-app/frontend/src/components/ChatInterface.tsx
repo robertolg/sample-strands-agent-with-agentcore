@@ -10,12 +10,15 @@ import { Greeting } from "@/components/Greeting"
 import { ToolSidebar } from "@/components/ToolSidebar"
 import { SuggestedQuestions } from "@/components/SuggestedQuestions"
 import { BrowserLiveViewButton } from "@/components/BrowserLiveViewButton"
+import { ResearchModal } from "@/components/ResearchModal"
+import { InterruptApprovalModal } from "@/components/InterruptApprovalModal"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { SidebarTrigger, SidebarInset, useSidebar } from "@/components/ui/sidebar"
-import { Upload, Send, FileText, ImageIcon, Square, Bot, Brain, Maximize2, Minimize2, Moon, Sun } from "lucide-react"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Upload, Send, FileText, ImageIcon, Square, Bot, Brain, Maximize2, Minimize2, Moon, Sun, FlaskConical } from "lucide-react"
 import { ModelConfigDialog } from "@/components/ModelConfigDialog"
 import { apiGet } from "@/lib/api-client"
 import { useTheme } from "next-themes"
@@ -83,7 +86,6 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     agentStatus,
     availableTools,
     currentReasoning,
-    toolProgress,
     sendMessage,
     stopGeneration,
     newChat,
@@ -93,6 +95,8 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     loadSession,
     onGatewayToolsChange,
     browserSession,
+    respondToInterrupt,
+    currentInterrupt
   } = useChat()
 
   // Stable sessionId reference to prevent unnecessary re-renders
@@ -105,6 +109,15 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
   const [suggestionKey, setSuggestionKey] = useState<string>("initial")
   const [isWideMode, setIsWideMode] = useState<boolean>(false)
   const [currentModelName, setCurrentModelName] = useState<string>("")
+  const [isResearchEnabled, setIsResearchEnabled] = useState<boolean>(false)
+  const [isResearchModalOpen, setIsResearchModalOpen] = useState<boolean>(false)
+  const [activeResearchId, setActiveResearchId] = useState<string | null>(null)
+  // Track each research execution independently
+  const [researchData, setResearchData] = useState<Map<string, {
+    query: string
+    result: string
+    status: 'idle' | 'searching' | 'analyzing' | 'generating' | 'complete' | 'error' | 'declined'
+  }>>(new Map())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isComposingRef = useRef(false)
@@ -115,6 +128,81 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     if (savedWideMode !== null) {
       setIsWideMode(savedWideMode === 'true')
     }
+  }, [])
+
+  // Sync Research Agent state with availableTools
+  useEffect(() => {
+    const researchTool = availableTools.find(tool => tool.id === 'agentcore_research-agent')
+    if (researchTool) {
+      setIsResearchEnabled(researchTool.enabled)
+    }
+  }, [availableTools])
+
+  // Toggle Research Agent
+  const toggleResearchAgent = useCallback(() => {
+    const researchTool = availableTools.find(tool => tool.id === 'agentcore_research-agent')
+    if (researchTool) {
+      toggleTool(researchTool.id)
+      setIsResearchEnabled(!researchTool.enabled)
+    }
+  }, [availableTools, toggleTool])
+
+  // Monitor messages for ALL research_agent tool executions to update state
+  useEffect(() => {
+    const newResearchData = new Map(researchData)
+
+    // Process ALL research executions across all messages
+    for (const group of groupedMessages) {
+      if (group.type === 'assistant_turn') {
+        for (const message of group.messages) {
+          if (message.toolExecutions && message.toolExecutions.length > 0) {
+            // Find ALL research_agent executions
+            const researchExecutions = message.toolExecutions.filter(
+              te => te.toolName === 'research_agent'
+            )
+
+            for (const researchExecution of researchExecutions) {
+              const executionId = researchExecution.id
+              const plan = researchExecution.toolInput?.plan || "Research"
+
+              if (!researchExecution.isComplete) {
+                // Still running
+                newResearchData.set(executionId, {
+                  query: plan,
+                  result: researchExecution.streamingResponse || '',
+                  status: researchExecution.streamingResponse ? 'generating' : 'searching'
+                })
+              } else if (researchExecution.toolResult) {
+                // Completed with result
+                const resultText = researchExecution.toolResult.toLowerCase()
+                const isDeclined = resultText.includes('declined') || resultText.includes('cancelled') || resultText.includes('cancel')
+
+                newResearchData.set(executionId, {
+                  query: plan,
+                  result: researchExecution.toolResult,
+                  status: isDeclined ? 'declined' : 'complete'
+                })
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Update state only if changed
+    if (newResearchData.size !== researchData.size ||
+        Array.from(newResearchData.entries()).some(([id, data]) => {
+          const existing = researchData.get(id)
+          return !existing || existing.result !== data.result || existing.status !== data.status
+        })) {
+      setResearchData(newResearchData)
+    }
+  }, [groupedMessages])
+
+  // Handle research container click
+  const handleResearchClick = useCallback((executionId: string) => {
+    setActiveResearchId(executionId)
+    setIsResearchModalOpen(true)
   }, [])
 
   // Save wide mode preference to localStorage
@@ -192,6 +280,21 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     setOpenMobile(false)
     await sendMessage(e, files)
   }
+
+  // Interrupt approval handlers
+  const handleApproveInterrupt = useCallback(() => {
+    if (currentInterrupt && currentInterrupt.interrupts.length > 0) {
+      const interrupt = currentInterrupt.interrupts[0]
+      respondToInterrupt(interrupt.id, "yes")
+    }
+  }, [currentInterrupt, respondToInterrupt])
+
+  const handleRejectInterrupt = useCallback(() => {
+    if (currentInterrupt && currentInterrupt.interrupts.length > 0) {
+      const interrupt = currentInterrupt.interrupts[0]
+      respondToInterrupt(interrupt.id, "no")
+    }
+  }, [currentInterrupt, respondToInterrupt])
 
   const scrollToBottomImmediate = useCallback(() => {
     if (!messagesEndRef.current) return
@@ -353,6 +456,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                   currentReasoning={currentReasoning}
                   availableTools={availableTools}
                   sessionId={stableSessionId}
+                  onResearchClick={handleResearchClick}
                 />
               )}
             </div>
@@ -459,7 +563,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                 onCompositionEnd={() => {
                   isComposingRef.current = false
                 }}
-                placeholder="Ask me anything..."
+                placeholder={isResearchEnabled ? "Ask me anything... (Research Agent active)" : "Ask me anything..."}
                 className="flex-1 min-h-[48px] max-h-32 rounded-lg border-0 focus:ring-0 resize-none py-3 px-4 text-base leading-6 overflow-y-auto bg-transparent transition-all duration-200"
                 disabled={agentStatus !== 'idle'}
                 rows={1}
@@ -471,13 +575,14 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                   onClick={stopGeneration}
                   variant="ghost"
                   className="h-10 w-10 hover:bg-muted-foreground/10 transition-all duration-200"
+                  title="Stop generation"
                 >
                   <Square className="w-5 h-5" />
                 </Button>
               ) : (
                 <Button
                   type="submit"
-                  disabled={!inputMessage.trim() && selectedFiles.length === 0}
+                  disabled={agentStatus !== 'idle' || (!inputMessage.trim() && selectedFiles.length === 0)}
                   className="h-10 w-10 gradient-primary hover:opacity-90 text-primary-foreground rounded-lg transition-all duration-200 disabled:opacity-50"
                 >
                   <Send className="w-5 h-5" />
@@ -488,8 +593,8 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
 
           {/* Model selector, keyboard shortcut hint and wide mode toggle */}
           <div className="mt-2 flex items-center justify-between text-sm text-muted-foreground/70">
-            {/* Left: Model Selector */}
-            <div className="flex items-center">
+            {/* Left: Model Selector and Research Agent */}
+            <div className="flex items-center gap-2">
               <ModelConfigDialog
                 sessionId={sessionId}
                 onOpenChange={(open) => {
@@ -510,6 +615,21 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                   </Button>
                 }
               />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={toggleResearchAgent}
+                className={`h-7 px-2 transition-all duration-200 text-xs font-medium flex items-center gap-1 ${
+                  isResearchEnabled
+                    ? 'bg-blue-500/20 text-blue-500 hover:bg-blue-500/30'
+                    : 'hover:bg-muted-foreground/10'
+                }`}
+                title={isResearchEnabled ? 'Research Agent enabled' : 'Enable Research Agent'}
+              >
+                <FlaskConical className="w-3.5 h-3.5" />
+                Research
+              </Button>
             </div>
 
             {/* Center: Keyboard shortcut hint */}
@@ -521,36 +641,80 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
             </div>
 
             {/* Right: Theme toggle and Wide mode toggle */}
-            <div className="flex items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                className="h-7 px-2 hover:bg-muted-foreground/10 transition-all duration-200 relative"
-                title="Toggle theme"
-              >
-                <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-                <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsWideMode(!isWideMode)}
-                className="h-7 px-2 hover:bg-muted-foreground/10 transition-all duration-200"
-                title={isWideMode ? "Switch to normal width" : "Switch to wide mode"}
-              >
-                {isWideMode ? (
-                  <Minimize2 className="w-4 h-4" />
-                ) : (
-                  <Maximize2 className="w-4 h-4" />
-                )}
-              </Button>
-            </div>
+            <TooltipProvider delayDuration={300}>
+              <div className="flex items-center gap-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                      className="h-7 px-2 hover:bg-muted-foreground/10 transition-all duration-200 relative"
+                    >
+                      <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+                      <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</p>
+                  </TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setIsWideMode(!isWideMode)}
+                      className="h-7 px-2 hover:bg-muted-foreground/10 transition-all duration-200"
+                    >
+                      {isWideMode ? (
+                        <Minimize2 className="w-4 h-4" />
+                      ) : (
+                        <Maximize2 className="w-4 h-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{isWideMode ? 'Normal width' : 'Wide mode'}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            </TooltipProvider>
           </div>
         </div>
       </SidebarInset>
+
+      {/* Research Modal */}
+      {activeResearchId && researchData.get(activeResearchId) && (
+        <ResearchModal
+          isOpen={isResearchModalOpen}
+          onClose={() => {
+            setIsResearchModalOpen(false)
+            setActiveResearchId(null)
+          }}
+          query={researchData.get(activeResearchId)!.query}
+          isLoading={(() => {
+            const status = researchData.get(activeResearchId)!.status
+            return status !== 'idle' && status !== 'complete' && status !== 'error' && status !== 'declined'
+          })()}
+          result={researchData.get(activeResearchId)!.result}
+          status={researchData.get(activeResearchId)!.status}
+          sessionId={stableSessionId}
+        />
+      )}
+
+      {/* Interrupt Approval Modal */}
+      {currentInterrupt && currentInterrupt.interrupts.length > 0 && (
+        <InterruptApprovalModal
+          isOpen={true}
+          onApprove={handleApproveInterrupt}
+          onReject={handleRejectInterrupt}
+          interrupts={currentInterrupt.interrupts}
+        />
+      )}
     </>
   )
 }

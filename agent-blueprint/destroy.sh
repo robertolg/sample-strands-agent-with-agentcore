@@ -105,12 +105,13 @@ display_menu() {
     echo "  1) AgentCore Runtime      (Agent container on Bedrock AgentCore)"
     echo "  2) Frontend + BFF         (Next.js + CloudFront + ALB)"
     echo "  3) MCP Servers            (Serverless Lambda + Fargate)"
-    echo "  4) Full Stack             (AgentCore + Frontend + MCPs)"
+    echo "  4) AgentCore Runtime A2A  (Research Agent, etc.)"
+    echo "  5) Full Stack             (AgentCore + Frontend + MCPs + A2A)"
     echo ""
     echo "  0) Exit"
     echo ""
     echo -e "${YELLOW}Note: Destruction order is reverse of deployment${NC}"
-    echo -e "${YELLOW}      (MCP Servers → Frontend → AgentCore)${NC}"
+    echo -e "${YELLOW}      (A2A → MCP Servers → Frontend → AgentCore)${NC}"
     echo ""
 }
 
@@ -256,6 +257,110 @@ destroy_mcp_servers() {
     echo ""
 }
 
+# Destroy AgentCore Runtime A2A
+destroy_agentcore_a2a() {
+    log_step "Destroying AgentCore Runtime A2A Agents..."
+    echo ""
+
+    if [ ! -d "agentcore-runtime-a2a-stack" ]; then
+        log_warn "agentcore-runtime-a2a-stack directory not found"
+        return
+    fi
+
+    cd agentcore-runtime-a2a-stack
+
+    # List available A2A agents
+    A2A_AGENTS=()
+    for agent_dir in */; do
+        if [ -d "$agent_dir/cdk" ]; then
+            agent_name=$(basename "$agent_dir")
+            A2A_AGENTS+=("$agent_name")
+        fi
+    done
+
+    if [ ${#A2A_AGENTS[@]} -eq 0 ]; then
+        log_warn "No A2A agents found"
+        cd ..
+        return
+    fi
+
+    log_info "Available A2A Agents:"
+    echo ""
+    for i in "${!A2A_AGENTS[@]}"; do
+        echo "  $((i+1))) ${A2A_AGENTS[$i]}"
+    done
+    echo ""
+    echo "  a) Destroy all available agents"
+    echo "  0) Skip"
+    echo ""
+
+    read -p "Select agent to destroy (0/1/2/3/a): " A2A_OPTION
+    echo ""
+
+    case $A2A_OPTION in
+        0)
+            log_info "Skipping A2A agent destruction"
+            cd ..
+            return
+            ;;
+        a)
+            log_step "Destroying all A2A agents..."
+            for agent_name in "${A2A_AGENTS[@]}"; do
+                destroy_single_a2a_agent "$agent_name"
+            done
+            ;;
+        [1-9])
+            idx=$((A2A_OPTION-1))
+            if [ $idx -ge 0 ] && [ $idx -lt ${#A2A_AGENTS[@]} ]; then
+                agent_name="${A2A_AGENTS[$idx]}"
+                destroy_single_a2a_agent "$agent_name"
+            else
+                log_error "Invalid option"
+                cd ..
+                return 1
+            fi
+            ;;
+        *)
+            log_error "Invalid option"
+            cd ..
+            return 1
+            ;;
+    esac
+
+    cd ..
+    log_info "AgentCore Runtime A2A agents destroyed!"
+    echo ""
+}
+
+# Destroy single A2A agent
+destroy_single_a2a_agent() {
+    local agent_name=$1
+    log_step "Destroying $agent_name A2A Agent..."
+    echo ""
+
+    if [ ! -d "$agent_name/cdk" ]; then
+        log_warn "$agent_name/cdk directory not found"
+        return
+    fi
+
+    cd "$agent_name/cdk"
+
+    # Install dependencies if needed
+    if [ ! -d "node_modules" ]; then
+        log_step "Installing CDK dependencies..."
+        npm install --silent
+    fi
+
+    # Destroy CDK stack
+    log_step "Destroying CDK stack..."
+    npx cdk destroy --force --all --region $AWS_REGION
+
+    cd ../..
+
+    log_info "$agent_name A2A agent destroyed!"
+    echo ""
+}
+
 # Main function
 main() {
     display_banner
@@ -263,7 +368,7 @@ main() {
     select_region
     display_menu
 
-    read -p "Select option (0-4): " OPTION
+    read -p "Select option (0-5): " OPTION
     echo ""
 
     case $OPTION in
@@ -290,13 +395,26 @@ main() {
             ;;
         4)
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "  Option 4: Full Stack (Everything)"
+            echo "  Option 4: AgentCore Runtime A2A"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
-            log_warn "Destroying in reverse order: MCP Servers → Frontend → AgentCore"
+            destroy_agentcore_a2a
+            ;;
+        5)
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  Option 5: Full Stack (Everything)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            log_warn "Destroying in reverse order: A2A → MCP Servers → Frontend → AgentCore"
             echo ""
 
-            # Destroy MCP Servers first
+            # Destroy A2A Agents first
+            destroy_agentcore_a2a
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+
+            # Destroy MCP Servers
             destroy_mcp_servers
             echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -316,7 +434,7 @@ main() {
             exit 0
             ;;
         *)
-            log_error "Invalid option. Please select 0-4."
+            log_error "Invalid option. Please select 0-5."
             exit 1
             ;;
     esac

@@ -2,7 +2,7 @@
 Tools API Router
 
 Provides tool listing and configuration endpoint for frontend.
-Combines local_tools, builtin_tools, gateway_targets, and agentcore_runtime_mcp tools.
+Combines local_tools, builtin_tools, gateway_targets, and agentcore_runtime_a2a tools.
 """
 
 from fastapi import APIRouter, Depends
@@ -30,7 +30,7 @@ def load_tools_config() -> Dict[str, Any]:
                 "local_tools": [],
                 "builtin_tools": [],
                 "gateway_targets": [],
-                "agentcore_runtime_mcp": []
+                "agentcore_runtime_a2a": []
             }
 
         with open(config_path, 'r') as f:
@@ -39,7 +39,7 @@ def load_tools_config() -> Dict[str, Any]:
             logger.info(f"   - local_tools: {len(config.get('local_tools', []))}")
             logger.info(f"   - builtin_tools: {len(config.get('builtin_tools', []))}")
             logger.info(f"   - gateway_targets: {len(config.get('gateway_targets', []))}")
-            logger.info(f"   - agentcore_runtime_mcp: {len(config.get('agentcore_runtime_mcp', []))}")
+            logger.info(f"   - agentcore_runtime_a2a: {len(config.get('agentcore_runtime_a2a', []))}")
             return config
 
     except Exception as e:
@@ -50,7 +50,7 @@ def load_tools_config() -> Dict[str, Any]:
             "local_tools": [],
             "builtin_tools": [],
             "gateway_targets": [],
-            "agentcore_runtime_mcp": []
+            "agentcore_runtime_a2a": []
         }
 
 
@@ -80,14 +80,14 @@ async def get_tools() -> Dict[str, Any]:
         # Add gateway targets (MCP via Gateway)
         all_tools.extend(config.get("gateway_targets", []))
 
-        # Add agentcore runtime MCP tools (A2A agents)
-        all_tools.extend(config.get("agentcore_runtime_mcp", []))
+        # Add agentcore runtime A2A tools (A2A agents)
+        all_tools.extend(config.get("agentcore_runtime_a2a", []))
 
         logger.info(f"Tools API: Returning {len(all_tools)} tools")
         logger.debug(f"  - local_tools: {len(config.get('local_tools', []))}")
         logger.debug(f"  - builtin_tools: {len(config.get('builtin_tools', []))}")
         logger.debug(f"  - gateway_targets: {len(config.get('gateway_targets', []))}")
-        logger.debug(f"  - agentcore_runtime_mcp: {len(config.get('agentcore_runtime_mcp', []))}")
+        logger.debug(f"  - agentcore_runtime_a2a: {len(config.get('agentcore_runtime_a2a', []))}")
 
         return {
             "tools": all_tools,

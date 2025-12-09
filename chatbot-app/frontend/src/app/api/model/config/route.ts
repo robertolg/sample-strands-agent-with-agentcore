@@ -52,8 +52,9 @@ export async function GET(request: NextRequest) {
       system_prompts: DEFAULT_PROMPTS
     }
 
-    if (userId === 'anonymous') {
-      // Anonymous user - load from local file storage (works for both local and AWS)
+    // Load user preferences from storage (local file or DynamoDB)
+    if (IS_LOCAL) {
+      // Local: Use local file storage for all users
       const { getUserModelConfig } = await import('@/lib/local-tool-store')
       const savedConfig = getUserModelConfig(userId)
 
@@ -78,38 +79,10 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      console.log(`[API] Loaded model config for anonymous user from local file`)
+      console.log(`[API] Loaded model config for user ${userId} from local file`)
     } else {
-      // Authenticated user - load from DynamoDB (AWS) or local file (local)
-      if (IS_LOCAL) {
-        // Local: Load from file
-        const { getUserModelConfig } = await import('@/lib/local-tool-store')
-        const savedConfig = getUserModelConfig(userId)
-
-        if (savedConfig) {
-          if (savedConfig.model_id) {
-            config.model_id = savedConfig.model_id
-          }
-          if (savedConfig.temperature !== undefined) {
-            config.temperature = savedConfig.temperature
-          }
-          if (savedConfig.system_prompt) {
-            config.system_prompts = config.system_prompts.map(p => ({
-              ...p,
-              active: false
-            }))
-            config.system_prompts.push({
-              id: 'custom',
-              name: 'Custom',
-              prompt: savedConfig.system_prompt,
-              active: true
-            })
-          }
-        }
-
-        console.log(`[API] Loaded model config for user ${userId} from local file`)
-      } else {
-        // AWS: Load from DynamoDB
+      // AWS: Use DynamoDB for all users (including anonymous)
+      try {
         const profile = await getUserProfile(userId)
 
         if (profile?.preferences) {
@@ -136,6 +109,9 @@ export async function GET(request: NextRequest) {
         }
 
         console.log(`[API] Loaded model config for user ${userId} from DynamoDB`)
+      } catch (dbError) {
+        // DynamoDB error - log and use defaults (expected for anonymous without profile)
+        console.warn(`[API] Failed to load from DynamoDB for user ${userId}, using defaults:`, dbError)
       }
     }
 

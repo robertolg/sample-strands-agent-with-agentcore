@@ -10,6 +10,7 @@ export interface ToolExecution {
     data: string
   }>
   isComplete: boolean
+  isCancelled?: boolean
   isExpanded: boolean
   streamingResponse?: string
 }

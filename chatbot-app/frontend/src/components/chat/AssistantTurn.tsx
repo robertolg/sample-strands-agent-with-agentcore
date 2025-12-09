@@ -7,6 +7,7 @@ import { Message } from '@/types/chat'
 import { ReasoningState } from '@/types/events'
 import { Markdown } from '@/components/ui/Markdown'
 import { ToolExecutionContainer } from './ToolExecutionContainer'
+import { ResearchContainer } from '@/components/ResearchContainer'
 import { LazyImage } from '@/components/ui/LazyImage'
 import { fetchAuthSession } from 'aws-amplify/auth'
 
@@ -19,9 +20,10 @@ interface AssistantTurnProps {
     tool_type?: string
   }>
   sessionId?: string
+  onResearchClick?: (executionId: string) => void
 }
 
-export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, currentReasoning, availableTools = [], sessionId }) => {
+export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, currentReasoning, availableTools = [], sessionId, onResearchClick }) => {
   // Get initial feedback state from first message
   const initialFeedback = messages[0]?.feedback || null
 
@@ -197,15 +199,70 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
         {/* Turn Content */}
         <div className="flex-1 space-y-4 pt-1 min-w-0">
           {/* Render messages in chronological order */}
-          {groupedContent.map((item) => (
-            <div key={item.key} className="animate-fade-in">
-              {item.type === 'tool' ? (
-                <ToolExecutionContainer
-                  toolExecutions={(item.content as Message).toolExecutions || []}
-                  availableTools={availableTools}
-                  sessionId={sessionId}
-                />
-              ) : (
+          {groupedContent.map((item) => {
+            if (item.type === 'tool') {
+              const message = item.content as Message
+              const toolExecutions = message.toolExecutions || []
+
+              // Separate research_agent from other tool executions
+              const researchExecution = toolExecutions.find(te => te.toolName === 'research_agent')
+              const otherExecutions = toolExecutions.filter(te => te.toolName !== 'research_agent')
+
+              return (
+                <div key={item.key} className="animate-fade-in space-y-4">
+                  {/* Research Container */}
+                  {researchExecution && (
+                    <ResearchContainer
+                      query={researchExecution.toolInput?.plan || 'Research plan'}
+                      status={
+                        researchExecution.isComplete
+                          ? (() => {
+                              // Check both isCancelled flag and tool result text for decline detection
+                              if (researchExecution.isCancelled) return 'declined'
+                              const resultText = (researchExecution.toolResult || '').toLowerCase()
+                              if (resultText.includes('declined') || resultText.includes('cancelled') || resultText.includes('cancel')) {
+                                return 'declined'
+                              }
+                              return 'complete'
+                            })()
+                          : researchExecution.streamingResponse
+                          ? 'generating'
+                          : 'searching'
+                      }
+                      isLoading={!researchExecution.isComplete}
+                      hasResult={(() => {
+                        if (!researchExecution.toolResult) return false
+                        if (researchExecution.isCancelled) return false
+                        const resultText = (researchExecution.toolResult || '').toLowerCase()
+                        return !(resultText.includes('declined') || resultText.includes('cancelled') || resultText.includes('cancel'))
+                      })()}
+                      onClick={() => {
+                        if (!onResearchClick || !researchExecution.toolResult) return
+
+                        // Check both isCancelled flag and tool result text
+                        if (researchExecution.isCancelled) return
+                        const resultText = (researchExecution.toolResult || '').toLowerCase()
+                        if (resultText.includes('declined') || resultText.includes('cancelled') || resultText.includes('cancel')) return
+
+                        onResearchClick(researchExecution.id)
+                      }}
+                    />
+                  )}
+
+                  {/* Other Tool Executions */}
+                  {otherExecutions.length > 0 && (
+                    <ToolExecutionContainer
+                      toolExecutions={otherExecutions}
+                      availableTools={availableTools}
+                      sessionId={sessionId}
+                    />
+                  )}
+                </div>
+              )
+            }
+
+            return (
+              <div key={item.key} className="animate-fade-in">
                 <div className="chat-chart-content w-full overflow-hidden">
                   <Markdown sessionId={sessionId} toolUseId={item.toolUseId}>{item.content as string}</Markdown>
 
@@ -230,9 +287,9 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
                     </div>
                   )}
                 </div>
-              )}
-            </div>
-          ))}
+              </div>
+            )
+          })}
 
           {/* Metrics Badges - Shows on hover at bottom right */}
           {((latencyMetrics && (latencyMetrics.timeToFirstToken || latencyMetrics.endToEndLatency)) || tokenUsage) && (
@@ -342,6 +399,7 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
     })
 
   const reasoningEqual = prevProps.currentReasoning?.text === nextProps.currentReasoning?.text
+  const callbackEqual = prevProps.onResearchClick === nextProps.onResearchClick
 
-  return messagesEqual && reasoningEqual && prevProps.sessionId === nextProps.sessionId
+  return messagesEqual && reasoningEqual && prevProps.sessionId === nextProps.sessionId && callbackEqual
 })

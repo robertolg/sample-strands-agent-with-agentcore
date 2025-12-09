@@ -71,10 +71,17 @@ export async function GET(request: NextRequest) {
         }
       }
     } else {
-      // Anonymous user - load from local file storage (works for both local and AWS)
-      const { getUserEnabledTools: getLocalUserEnabledTools } = await import('@/lib/local-tool-store')
-      enabledToolIds = getLocalUserEnabledTools(userId)
-      console.log(`[API] Loaded anonymous user from local file: ${enabledToolIds.length} enabled`)
+      // Anonymous user - load from local file (local) or DynamoDB (AWS)
+      if (IS_LOCAL) {
+        const { getUserEnabledTools: getLocalUserEnabledTools } = await import('@/lib/local-tool-store')
+        enabledToolIds = getLocalUserEnabledTools(userId)
+        console.log(`[API] Loaded anonymous user from local file: ${enabledToolIds.length} enabled`)
+      } else {
+        // AWS: Load from DynamoDB
+        const storedTools = await getDynamoUserEnabledTools(userId)
+        enabledToolIds = storedTools
+        console.log(`[API] Loaded anonymous user from DynamoDB: ${enabledToolIds.length} enabled`)
+      }
     }
 
     // Step 3: Map tools with user-specific enabled state
@@ -149,10 +156,10 @@ export async function GET(request: NextRequest) {
     })
 
     // Runtime A2A agents (grouped)
-    const runtimeA2AServers = toolsConfig.agentcore_runtime_mcp || []
+    const runtimeA2AServers = toolsConfig.agentcore_runtime_a2a || []
     const runtimeA2ATools = runtimeA2AServers.map((server: any) => {
-      // Check if any tool in the server is enabled
-      const anyToolEnabled = server.tools?.some((tool: any) => enabledToolIds.includes(tool.id)) || false
+      // For A2A agents, check if the agent itself is enabled (not nested tools)
+      const isEnabled = enabledToolIds.includes(server.id)
 
       return {
         id: server.id,
@@ -162,15 +169,9 @@ export async function GET(request: NextRequest) {
         icon: server.icon,
         type: 'runtime-a2a',
         tool_type: 'runtime-a2a',
-        enabled: anyToolEnabled,
-        isDynamic: true,
-        endpoint_arn: server.endpoint_arn,
-        tools: server.tools?.map((tool: any) => ({
-          id: tool.id,
-          name: tool.name,
-          description: tool.description,
-          enabled: enabledToolIds.includes(tool.id)
-        })) || []
+        enabled: isEnabled,
+        isDynamic: false,
+        runtime_arn: server.runtime_arn
       }
     })
 
@@ -234,7 +235,7 @@ export async function GET(request: NextRequest) {
     }))
 
     // Runtime A2A agents (fallback - grouped)
-    const runtimeA2AServers = toolsConfigFallback.agentcore_runtime_mcp || []
+    const runtimeA2AServers = toolsConfigFallback.agentcore_runtime_a2a || []
     const runtimeA2ATools = runtimeA2AServers.map((server: any) => ({
       id: server.id,
       name: server.name,
@@ -244,9 +245,8 @@ export async function GET(request: NextRequest) {
       type: 'runtime-a2a',
       tool_type: 'runtime-a2a',
       enabled: server.enabled ?? false,
-      isDynamic: true,
-      endpoint_arn: server.endpoint_arn,
-      tools: server.tools || []
+      isDynamic: false,
+      runtime_arn: server.runtime_arn
     }))
 
     return NextResponse.json({

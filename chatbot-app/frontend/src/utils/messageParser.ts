@@ -52,7 +52,7 @@ export function createToolExecution(
     toolInput: toolUse.input,
     reasoning: [],
     toolResult: toolResultString,
-    isComplete: true,
+    isComplete: !!toolResult,  // Only complete if toolResult exists
     isExpanded: false
   }
 

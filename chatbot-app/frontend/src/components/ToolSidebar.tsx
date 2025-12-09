@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Settings, Wrench, Server, Brain, Plus, Globe } from 'lucide-react';
+import { Settings, Wrench, Brain, Plus, Globe } from 'lucide-react';
 import { Tool } from '@/types/chat';
 import { Button } from '@/components/ui/button';
 import {
@@ -140,17 +140,6 @@ export function ToolSidebar({
                   onToggleTool={onToggleTool}
                   onToggleCategory={toggleCategory}
                   areAllEnabled={areAllEnabled('gateway')}
-                />
-
-                {/* AgentCore Runtime A2A Agents */}
-                <ToolSection
-                  title="AgentCore Runtime A2A Agents"
-                  icon={Server}
-                  tools={groupedTools['runtime-a2a']}
-                  category="runtime-a2a"
-                  onToggleTool={onToggleTool}
-                  onToggleCategory={toggleCategory}
-                  areAllEnabled={areAllEnabled('runtime-a2a')}
                 />
               </div>
             )}

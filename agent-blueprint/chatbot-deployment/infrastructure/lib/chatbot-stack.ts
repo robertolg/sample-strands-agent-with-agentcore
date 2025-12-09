@@ -525,6 +525,7 @@ async function sendResponse(event, status, data, reason) {
         resources: [
           `arn:aws:ssm:${this.region}:${this.account}:parameter/${projectName}/${environment}/agentcore/*`,
           `arn:aws:ssm:${this.region}:${this.account}:parameter/${projectName}/${environment}/mcp/*`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/${projectName}/${environment}/a2a/*`,
           `arn:aws:ssm:${this.region}:${this.account}:parameter/mcp/endpoints/*`
         ]
       })
@@ -616,6 +617,22 @@ async function sendResponse(event, status, data, reason) {
         resources: [
           `arn:aws:bedrock-agentcore:${this.region}:${this.account}:browser/*`,
           `arn:aws:bedrock-agentcore:${this.region}:${this.account}:browser-custom/*`
+        ]
+      })
+    );
+
+    // Add S3 permissions for Research Agent chart images (presigned URL generation)
+    frontendTaskDefinition.addToTaskRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ResearchAgentChartAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          's3:GetObject',
+          's3:ListBucket'
+        ],
+        resources: [
+          `arn:aws:s3:::${projectName}-research-charts-${this.account}-${this.region}`,
+          `arn:aws:s3:::${projectName}-research-charts-${this.account}-${this.region}/*`
         ]
       })
     );
