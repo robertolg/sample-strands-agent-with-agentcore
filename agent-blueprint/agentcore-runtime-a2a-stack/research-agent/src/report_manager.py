@@ -10,6 +10,7 @@ Manages:
 
 import os
 import json
+import re
 import threading
 import tempfile
 import logging
@@ -74,7 +75,19 @@ class ReportManager:
             session_id: Unique session identifier
             user_id: User identifier for S3 organization (optional)
             base_dir: Base directory for workspaces (default: /tmp/document-generator)
+
+        Raises:
+            ValueError: If session_id or user_id contains invalid characters or attempts path traversal
         """
+        # Security: Validate session_id to prevent path traversal
+        # Only allow alphanumeric, dash, and underscore (matches UUID format)
+        if not re.match(r'^[a-zA-Z0-9_-]+$', session_id):
+            raise ValueError(f"Invalid session_id format: {session_id}. Only alphanumeric, dash, and underscore are allowed.")
+
+        # Security: Validate user_id
+        if user_id and not re.match(r'^[a-zA-Z0-9_-]+$', user_id):
+            raise ValueError(f"Invalid user_id format: {user_id}. Only alphanumeric, dash, and underscore are allowed.")
+
         self.session_id = session_id
         self.user_id = user_id or "default_user"
         self.base_dir = base_dir or os.path.join(tempfile.gettempdir(), "document-generator")
@@ -84,6 +97,13 @@ class ReportManager:
         self.draft_path = os.path.join(self.workspace, "research_report.md")  # Fixed filename
         self.charts_dir = os.path.join(self.workspace, "charts")
         self.output_dir = os.path.join(self.workspace, "output")
+
+        # Security: Ensure workspace stays within base_dir (prevent path traversal)
+        workspace_real = Path(self.workspace).resolve()
+        base_real = Path(self.base_dir).resolve()
+
+        if not str(workspace_real).startswith(str(base_real)):
+            raise ValueError(f"Path traversal detected: workspace {workspace_real} is outside base directory {base_real}")
 
         os.makedirs(self.workspace, exist_ok=True)
         os.makedirs(self.charts_dir, exist_ok=True)
