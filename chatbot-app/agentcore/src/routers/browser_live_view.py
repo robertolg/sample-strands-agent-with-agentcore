@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 async def get_browser_live_view_url(sessionId: str, browserId: str):
     """Get presigned live view URL for browser session.
 
-    This endpoint uses BrowserClient.generate_live_view_url() to create
-    a properly signed WebSocket URL for DCV live view connections.
+    This endpoint supports both:
+    1. Builtin browser tools (uses cached controller)
+    2. A2A Browser Use Agent (creates new BrowserClient)
 
     Query Parameters:
         sessionId: Browser session ID (from metadata)
@@ -36,32 +37,73 @@ async def get_browser_live_view_url(sessionId: str, browserId: str):
 
         # Import here to avoid circular dependencies
         from builtin_tools.lib.browser_controller import _browser_sessions
+        from bedrock_agentcore.tools.browser_client import BrowserClient
 
-        # Find controller by browser session ID
-        # sessionId here is actually the browser session ID from metadata
+        # Strategy 1: Try to find builtin browser tool controller
         controller = None
         for chat_session_id, ctrl in _browser_sessions.items():
             if (ctrl.browser_session_client and
                 ctrl.browser_session_client.session_id == sessionId):
                 controller = ctrl
-                logger.info(f"[Live View] Found controller for chat session: {chat_session_id}")
+                logger.info(f"[Live View] Found builtin browser controller for chat session: {chat_session_id}")
                 break
 
+        # Strategy 2: If not found, create new BrowserClient for A2A browser session
         if not controller:
-            logger.error(f"[Live View] No controller found for browser session: {sessionId}")
-            logger.error(f"[Live View] Available sessions: {list(_browser_sessions.keys())}")
-            raise HTTPException(
-                status_code=404,
-                detail=f"Browser session not found: {sessionId}"
-            )
+            logger.info(f"[Live View] No builtin controller found, creating BrowserClient for A2A session")
 
+            if not browserId:
+                raise HTTPException(
+                    status_code=400,
+                    detail="browserId is required for A2A browser sessions"
+                )
+
+            # Create BrowserClient to generate live view URL
+            try:
+                region = os.getenv('AWS_REGION', 'us-west-2')
+                browser_client = BrowserClient(region=region)
+
+                # Set session_id directly (don't call start - session already exists)
+                browser_client.session_id = sessionId
+                browser_client.browser_id = browserId
+
+                logger.info(f"[Live View] Created BrowserClient for A2A session: {sessionId}")
+
+                # Generate presigned live view URL using SDK
+                expires = 300
+                presigned_url = browser_client.generate_live_view_url(expires=expires)
+
+                logger.info(
+                    f"[Live View] Generated fresh presigned URL for A2A session {sessionId}: "
+                    f"{presigned_url[:100]}..."
+                )
+
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "success": True,
+                        "presignedUrl": presigned_url,
+                        "sessionId": sessionId,
+                        "browserId": browserId,
+                        "expiresIn": expires,
+                    }
+                )
+
+            except Exception as e:
+                logger.error(f"[Live View] Failed to create BrowserClient for A2A session: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to access A2A browser session: {str(e)}"
+                )
+
+        # Strategy 1 success: Use builtin controller
         if not controller.browser_session_client:
             raise HTTPException(
                 status_code=400,
                 detail="Browser session client not initialized"
             )
 
-        # Verify browser IDs match
+        # Verify browser IDs match (for builtin tools)
         if controller.browser_id != browserId:
             logger.warning(
                 f"[Live View] Browser ID mismatch: requested={browserId}, "
@@ -79,7 +121,7 @@ async def get_browser_live_view_url(sessionId: str, browserId: str):
 
             # Keep HTTPS format - DCV SDK handles WebSocket conversion internally
             logger.info(
-                f"[Live View] Generated fresh presigned URL for browser session {sessionId}: "
+                f"[Live View] Generated fresh presigned URL for builtin session {sessionId}: "
                 f"{presigned_url[:100]}..."
             )
 

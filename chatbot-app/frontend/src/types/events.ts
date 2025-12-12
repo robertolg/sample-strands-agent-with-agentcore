@@ -70,6 +70,21 @@ export interface InterruptEvent {
   }>;
 }
 
+export interface ProgressEvent {
+  type: 'progress';
+  message?: string;
+  data?: Record<string, any>;
+}
+
+export interface MetadataEvent {
+  type: 'metadata';
+  metadata?: {
+    browserSessionId?: string;
+    browserId?: string;
+    [key: string]: any;
+  };
+}
+
 export type StreamEvent =
   | ReasoningEvent
   | ResponseEvent
@@ -79,7 +94,9 @@ export type StreamEvent =
   | ThinkingEvent
   | CompleteEvent
   | ErrorEvent
-  | InterruptEvent;
+  | InterruptEvent
+  | ProgressEvent
+  | MetadataEvent;
 
 // Chat state interfaces
 export interface ReasoningState {
@@ -115,7 +132,7 @@ export interface ChatSessionState {
   interrupt: InterruptState | null;
 }
 
-export type AgentStatus = 'idle' | 'thinking' | 'responding' | 'researching';
+export type AgentStatus = 'idle' | 'thinking' | 'responding' | 'researching' | 'browser_automation';
 
 export interface LatencyMetrics {
   requestStartTime: number | null;

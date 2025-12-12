@@ -72,7 +72,7 @@ export function ChatSessionList({
       {sessions.map((session) => (
         <SidebarMenuItem key={session.sessionId} className="group">
           <div
-            className={`flex items-start gap-2 p-2.5 rounded-lg hover:bg-sidebar-accent transition-colors cursor-pointer relative ${
+            className={`flex items-start gap-2 p-3 md:p-2.5 rounded-lg hover:bg-sidebar-accent transition-colors cursor-pointer relative ${
               session.sessionId === currentSessionId ? 'bg-sidebar-accent/50 ring-1 ring-primary/20' : ''
             }`}
             onClick={() => {
@@ -96,13 +96,13 @@ export function ChatSessionList({
                 </span>
               </div>
             </div>
-            {/* Delete button - shows on hover */}
+            {/* Delete button - shows on hover on desktop, always visible on mobile */}
             <button
               onClick={(e) => handleDeleteSession(session.sessionId, e)}
-              className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-destructive/10 text-sidebar-foreground/60 hover:text-destructive flex-shrink-0"
+              className="md:opacity-0 md:group-hover:opacity-100 transition-opacity p-2 md:p-1.5 rounded hover:bg-destructive/10 text-sidebar-foreground/60 hover:text-destructive flex-shrink-0"
               title="Delete session"
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              <Trash2 className="h-4 w-4 md:h-3.5 md:w-3.5" />
             </button>
           </div>
         </SidebarMenuItem>

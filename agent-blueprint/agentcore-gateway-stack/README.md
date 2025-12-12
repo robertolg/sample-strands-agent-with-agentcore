@@ -324,12 +324,6 @@ cd infrastructure
 npm install aws-cdk@2.167.1
 ```
 
-## 📚 Additional Resources
-
-- [AWS Bedrock AgentCore Documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore.html)
-- [MCP Protocol Specification](https://modelcontextprotocol.io/)
-- [Terraform Reference Implementation](../sample-deep-research-bedrock-agentcore-shared-account/terraform/tools/)
-
 ## 🤝 Contributing
 
 Contributions are welcome! Please follow the existing code structure and patterns.

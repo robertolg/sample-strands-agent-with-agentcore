@@ -79,6 +79,12 @@ else
 fi
 echo ""
 
+# Clean previous build artifacts to force fresh asset generation
+log_step "Cleaning previous CDK build artifacts..."
+rm -rf cdk.out
+log_info "Clean complete"
+echo ""
+
 # Build TypeScript
 log_step "Building CDK stack..."
 npm run build

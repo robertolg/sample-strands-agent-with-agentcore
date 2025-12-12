@@ -104,7 +104,7 @@ class StopHook(HookProvider):
 
 
 class ResearchApprovalHook(HookProvider):
-    """Hook to request user approval before executing research agent"""
+    """Hook to request user approval before executing research agent or browser-use agent"""
 
     def __init__(self, app_name: str = "chatbot"):
         self.app_name = app_name
@@ -113,36 +113,56 @@ class ResearchApprovalHook(HookProvider):
         registry.add_callback(BeforeToolCallEvent, self.request_approval)
 
     def request_approval(self, event: BeforeToolCallEvent) -> None:
-        """Request user approval before executing research_agent tool"""
+        """Request user approval before executing research_agent or browser_use_agent tool"""
         tool_name = event.tool_use.get("name", "")
 
-        # Only interrupt for research_agent tool
-        if tool_name != "research_agent":
+        # Only interrupt for research_agent or browser_use_agent tools
+        if tool_name not in ["research_agent", "browser_use_agent"]:
             return
 
-        # Extract research plan from tool input
+        # Extract tool input
         tool_input = event.tool_use.get("input", {})
-        plan = tool_input.get("plan", "No plan provided")
 
-        logger.info(f"🔍 Requesting approval for research_agent with plan: {plan[:100]}...")
+        # Prepare approval details based on tool type
+        if tool_name == "research_agent":
+            # Research Agent: show plan
+            plan = tool_input.get("plan", "No plan provided")
+            logger.info(f"🔍 Requesting approval for research_agent with plan: {plan[:100]}...")
 
-        # Raise interrupt with research plan details
-        approval = event.interrupt(
-            f"{self.app_name}-research-approval",
-            reason={
-                "tool_name": tool_name,
-                "plan": plan,
-                "plan_preview": plan[:200] + "..." if len(plan) > 200 else plan
-            }
-        )
+            approval = event.interrupt(
+                f"{self.app_name}-research-approval",
+                reason={
+                    "tool_name": tool_name,
+                    "plan": plan,
+                    "plan_preview": plan[:200] + "..." if len(plan) > 200 else plan
+                }
+            )
+            action = "research"
+
+        elif tool_name == "browser_use_agent":
+            # Browser-Use Agent: show task and max_steps
+            task = tool_input.get("task", "No task provided")
+            max_steps = tool_input.get("max_steps", 15)
+            logger.info(f"🌐 Requesting approval for browser_use_agent with task: {task[:100]}...")
+
+            approval = event.interrupt(
+                f"{self.app_name}-browser-approval",
+                reason={
+                    "tool_name": tool_name,
+                    "task": task,
+                    "task_preview": task[:200] + "..." if len(task) > 200 else task,
+                    "max_steps": max_steps
+                }
+            )
+            action = "browser automation"
 
         # Check user response
         if approval and approval.lower() in ["y", "yes", "approve"]:
-            logger.info("✅ Research approved by user, proceeding with execution")
+            logger.info(f"✅ {action.capitalize()} approved by user, proceeding with execution")
             return
         else:
-            logger.info("❌ Research rejected by user, cancelling tool execution")
-            event.cancel_tool = "User declined to proceed with research"
+            logger.info(f"❌ {action.capitalize()} rejected by user, cancelling tool execution")
+            event.cancel_tool = f"User declined to proceed with {action}"
 
 
 class ConversationCachingHook(HookProvider):
@@ -527,12 +547,25 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
     def create_agent(self):
         """Create Strands agent with filtered tools and session management"""
         try:
+            from botocore.config import Config
+
             config = self.get_model_config()
+
+            # Configure retry for transient Bedrock errors (serviceUnavailableException)
+            retry_config = Config(
+                retries={
+                    'max_attempts': 10,
+                    'mode': 'adaptive'  # Adaptive retry with exponential backoff
+                },
+                connect_timeout=30,
+                read_timeout=120
+            )
 
             # Create model configuration
             model_config = {
                 "model_id": config["model_id"],
-                "temperature": config.get("temperature", 0.7)
+                "temperature": config.get("temperature", 0.7),
+                "boto_client_config": retry_config
             }
 
             # Add cache_prompt if caching is enabled (BedrockModel handles SystemContentBlock formatting)
@@ -540,6 +573,7 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
                 model_config["cache_prompt"] = "default"
                 logger.info("✅ System prompt caching enabled (cache_prompt=default)")
 
+            logger.info("✅ Bedrock retry config: max_attempts=10, mode=adaptive")
             model = BedrockModel(**model_config)
 
             # Get filtered tools based on user preferences

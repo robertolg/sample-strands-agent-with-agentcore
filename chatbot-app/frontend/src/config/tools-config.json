@@ -94,6 +94,23 @@
           "description": "Switch, close, or create browser tabs (use get_page_info to view tabs)"
         }
       ]
+    },
+    {
+      "id": "agentcore_browser-use-agent",
+      "name": "Browser-Use Agent",
+      "description": "Autonomous browser automation powered by browser-use AI with live view support",
+      "category": "browser",
+      "icon": "🤖",
+      "enabled": true,
+      "isDynamic": true,
+      "tools": [
+        {
+          "id": "agentcore_browser-use-agent",
+          "name": "Browser Automation Skill",
+          "description": "Execute multi-step browser tasks: navigate websites, interact with elements, fill forms, extract information using AI-driven adaptive navigation",
+          "enabled": true
+        }
+      ]
     }
   ],
   "gateway_targets": [

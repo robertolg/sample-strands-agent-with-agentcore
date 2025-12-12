@@ -118,11 +118,19 @@ export const useStreamEvents = ({
     if (data.type === 'tool_use') {
       // Tool execution started - update agent status
       const isResearchAgent = data.name === 'research_agent'
+      const isBrowserUseAgent = data.name === 'browser_use_agent'
+
+      let agentStatus: 'responding' | 'researching' | 'browser_automation' = 'responding'
+      if (isResearchAgent) {
+        agentStatus = 'researching'
+      } else if (isBrowserUseAgent) {
+        agentStatus = 'browser_automation'
+      }
 
       setUIState(prev => ({
         ...prev,
         isTyping: true,
-        agentStatus: isResearchAgent ? 'researching' : 'responding'  // Keep responding for non-research tools
+        agentStatus
       }))
 
       // Finalize current streaming message before adding tool
@@ -492,6 +500,10 @@ export const useStreamEvents = ({
       case 'tool_use':
         handleToolUseEvent(event)
         break
+      case 'progress':
+        // Handle progress events from streaming tools
+        console.log('[Tool Progress]', event)
+        break
       case 'tool_result':
         handleToolResultEvent(event)
         break
@@ -508,6 +520,35 @@ export const useStreamEvents = ({
       case 'interrupt':
         handleInterruptEvent(event)
         break
+      case 'metadata':
+        // Handle metadata updates (e.g., browser session during tool execution)
+        if (event.metadata?.browserSessionId) {
+          console.log('[Live View] Received metadata event:', {
+            browserSessionId: event.metadata.browserSessionId,
+            browserId: event.metadata.browserId || 'not provided'
+          })
+
+          const browserSession = {
+            sessionId: event.metadata.browserSessionId,
+            browserId: event.metadata.browserId || null
+          }
+
+          // Update session state immediately
+          setSessionState(prev => ({
+            ...prev,
+            browserSession
+          }))
+
+          // Save to sessionStorage
+          const currentSessionId = sessionStorage.getItem('chat-session-id')
+          if (currentSessionId) {
+            sessionStorage.setItem(`browser-session-${currentSessionId}`, JSON.stringify(browserSession))
+            console.log('[Live View] Saved browserSession to sessionStorage:', currentSessionId)
+          }
+
+          console.log('[Live View] ✅ Browser session updated - Live View now available!', browserSession)
+        }
+        break
     }
   }, [
     handleReasoningEvent,
@@ -517,7 +558,8 @@ export const useStreamEvents = ({
     handleCompleteEvent,
     handleInitEvent,
     handleErrorEvent,
-    handleInterruptEvent
+    handleInterruptEvent,
+    setSessionState
   ])
 
   return { handleStreamEvent }

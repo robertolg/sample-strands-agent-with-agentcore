@@ -3,7 +3,7 @@
 import React from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { FlaskConical, CheckCircle2, XCircle } from 'lucide-react'
+import { FlaskConical, CheckCircle2, XCircle, Globe } from 'lucide-react'
 
 interface InterruptApprovalModalProps {
   isOpen: boolean
@@ -16,6 +16,9 @@ interface InterruptApprovalModalProps {
       tool_name?: string
       plan?: string
       plan_preview?: string
+      task?: string
+      task_preview?: string
+      max_steps?: number
     }
   }>
 }
@@ -26,45 +29,64 @@ export function InterruptApprovalModal({
   onReject,
   interrupts
 }: InterruptApprovalModalProps) {
-  // For now, we only handle single interrupt (research approval)
+  // Handle single interrupt (research or browser approval)
   const interrupt = interrupts[0]
 
   if (!interrupt) return null
 
   const isResearchApproval = interrupt.name === "chatbot-research-approval"
+  const isBrowserApproval = interrupt.name === "chatbot-browser-approval"
+
+  // Research Agent fields
   const plan = interrupt.reason?.plan || ""
-  const planPreview = interrupt.reason?.plan_preview || ""
+
+  // Browser-Use Agent fields
+  const task = interrupt.reason?.task || ""
+  const maxSteps = interrupt.reason?.max_steps || 15
 
   return (
     <Dialog open={isOpen} onOpenChange={() => {}}>
       <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
         <DialogHeader>
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-blue-500/10 rounded-lg">
-              <FlaskConical className="w-5 h-5 text-blue-500" />
+            <div className={`p-2.5 rounded-lg ${isBrowserApproval ? 'bg-purple-500/10' : 'bg-blue-500/10'}`}>
+              {isBrowserApproval ? (
+                <Globe className="w-5 h-5 text-purple-500" />
+              ) : (
+                <FlaskConical className="w-5 h-5 text-blue-500" />
+              )}
             </div>
             <div>
               <DialogTitle className="text-lg font-semibold">
-                Research Approval Required
+                {isBrowserApproval ? 'Browser Automation Approval Required' : 'Research Approval Required'}
               </DialogTitle>
               <DialogDescription className="text-sm mt-0.5">
-                Review the research plan before proceeding
+                {isBrowserApproval
+                  ? 'Review the browser task before proceeding'
+                  : 'Review the research plan before proceeding'}
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
-        {/* Research Plan - Scrollable */}
+        {/* Content - Scrollable */}
         <div className="flex-1 overflow-y-auto mt-4 mb-4">
           <div className="rounded-lg border bg-muted/20 p-5">
             <h3 className="text-xs font-semibold mb-3 text-muted-foreground uppercase tracking-wide">
-              Research Plan
+              {isBrowserApproval ? 'Browser Task' : 'Research Plan'}
             </h3>
             <div className="prose prose-sm dark:prose-invert max-w-none">
               <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-foreground/90 bg-transparent border-0 p-0 m-0">
-                {plan}
+                {isBrowserApproval ? task : plan}
               </pre>
             </div>
+            {isBrowserApproval && (
+              <div className="mt-3 pt-3 border-t border-muted-foreground/10">
+                <p className="text-xs text-muted-foreground">
+                  Maximum steps: <span className="font-medium text-foreground">{maxSteps}</span>
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -81,10 +103,10 @@ export function InterruptApprovalModal({
           <Button
             variant="default"
             onClick={onApprove}
-            className="gap-2 bg-blue-600 hover:bg-blue-700"
+            className={`gap-2 ${isBrowserApproval ? 'bg-purple-600 hover:bg-purple-700' : 'bg-blue-600 hover:bg-blue-700'}`}
           >
             <CheckCircle2 className="w-4 h-4" />
-            Approve & Start Research
+            {isBrowserApproval ? 'Approve & Start Browser Task' : 'Approve & Start Research'}
           </Button>
         </div>
       </DialogContent>

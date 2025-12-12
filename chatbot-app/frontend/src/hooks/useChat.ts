@@ -164,20 +164,28 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
   // Polling for ongoing tool executions
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const isPollingActiveRef = useRef(false)
+  const pollingSessionIdRef = useRef<string | null>(null) // Track which session is being polled
 
-  const startPollingForOngoingTools = useCallback((sessionId: string) => {
+  const startPollingForOngoingTools = useCallback((targetSessionId: string) => {
     // Clear any existing polling
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current)
     }
 
-    console.log('[useChat] Starting polling for ongoing tool executions')
+    console.log(`[useChat] Starting polling for session: ${targetSessionId}`)
     isPollingActiveRef.current = true
+    pollingSessionIdRef.current = targetSessionId // Store the session being polled
 
     const poll = async () => {
       try {
-        console.log('[useChat] Polling: reloading session...')
-        await apiLoadSession(sessionId)
+        // Check if we're still polling the same session
+        if (pollingSessionIdRef.current !== targetSessionId) {
+          console.log(`[useChat] Polling session mismatch, stopping poll (expected: ${pollingSessionIdRef.current}, got: ${targetSessionId})`)
+          return
+        }
+
+        console.log(`[useChat] Polling: reloading session ${targetSessionId}...`)
+        await apiLoadSession(targetSessionId)
       } catch (error) {
         console.error('[useChat] Polling error:', error)
       }
@@ -192,14 +200,25 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
 
   // Monitor messages for ongoing tools (separate effect)
   useEffect(() => {
+    // Only process if we have a valid sessionId
+    if (!sessionId) {
+      return
+    }
+
     const hasOngoingTools = messages.some(msg =>
       msg.toolExecutions &&
       msg.toolExecutions.some(te => !te.isComplete)
     )
 
+    // Check for ongoing A2A agents (research_agent or browser_use_agent)
     const hasOngoingResearch = messages.some(msg =>
       msg.toolExecutions &&
       msg.toolExecutions.some(te => !te.isComplete && !te.isCancelled && te.toolName === 'research_agent')
+    )
+
+    const hasOngoingBrowserAutomation = messages.some(msg =>
+      msg.toolExecutions &&
+      msg.toolExecutions.some(te => !te.isComplete && !te.isCancelled && te.toolName === 'browser_use_agent')
     )
 
     // Check if there's a completed tool but missing final assistant response
@@ -223,7 +242,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
       }
     }
 
-    // Always update UI if there's ongoing research (even if polling not started yet)
+    // Always update UI if there's ongoing A2A agent work (even if polling not started yet)
     if (hasOngoingResearch) {
       setUIState(prev => {
         if (prev.agentStatus !== 'researching') {
@@ -232,6 +251,18 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
             ...prev,
             isTyping: true,
             agentStatus: 'researching'
+          }
+        }
+        return prev
+      })
+    } else if (hasOngoingBrowserAutomation) {
+      setUIState(prev => {
+        if (prev.agentStatus !== 'browser_automation') {
+          console.log('[useChat] Setting status to browser_automation')
+          return {
+            ...prev,
+            isTyping: true,
+            agentStatus: 'browser_automation'
           }
         }
         return prev
@@ -260,13 +291,14 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
       console.log('[useChat] Completed tool awaiting response, continuing to poll')
       // Don't stop polling, keep waiting for final response
     }
-  }, [messages, setUIState])
+  }, [messages, sessionId, setUIState, startPollingForOngoingTools])
 
   const stopPolling = useCallback(() => {
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current)
       pollingIntervalRef.current = null
       isPollingActiveRef.current = false
+      pollingSessionIdRef.current = null // Clear the polling session ID
       console.log('[useChat] Polling stopped')
     }
   }, [])
@@ -530,16 +562,26 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     // Clear interrupt state
     setSessionState(prev => ({ ...prev, interrupt: null }))
 
-    // Determine if this is research agent interrupt
+    // Determine if this is research agent or browser use agent interrupt
     const isResearchInterrupt = sessionState.interrupt.interrupts.some(
       int => int.reason?.tool_name === 'research_agent'
     )
+    const isBrowserUseInterrupt = sessionState.interrupt.interrupts.some(
+      int => int.reason?.tool_name === 'browser_use_agent'
+    )
 
-    // Set appropriate status: 'researching' for research agent, 'thinking' for others
+    // Set appropriate status: 'researching' for research agent, 'browser_automation' for browser use, 'thinking' for others
+    let agentStatus: 'thinking' | 'researching' | 'browser_automation' = 'thinking'
+    if (isResearchInterrupt) {
+      agentStatus = 'researching'
+    } else if (isBrowserUseInterrupt) {
+      agentStatus = 'browser_automation'
+    }
+
     setUIState(prev => ({
       ...prev,
       isTyping: true,
-      agentStatus: isResearchInterrupt ? 'researching' : 'thinking'
+      agentStatus
     }))
 
     // Send interrupt response to backend (similar to sendMessage but with interruptResponse)

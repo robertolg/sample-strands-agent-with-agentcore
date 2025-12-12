@@ -1,6 +1,6 @@
 /**
- * Research Agent A2A Runtime Stack
- * Deploys Research Agent as AgentCore Runtime using CodeBuild pattern
+ * Browser Use Agent A2A Runtime Stack
+ * Deploys Browser Use Agent as AgentCore Runtime using CodeBuild pattern
  * A2A Protocol compatible - exposes HTTP endpoints via AgentCore Runtime
  */
 import * as cdk from 'aws-cdk-lib'
@@ -15,33 +15,33 @@ import * as cr from 'aws-cdk-lib/custom-resources'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
 import { Construct } from 'constructs'
 
-export interface ResearchAgentRuntimeStackProps extends cdk.StackProps {
+export interface BrowserUseAgentRuntimeStackProps extends cdk.StackProps {
   projectName?: string
   environment?: string
 }
 
-export class ResearchAgentRuntimeStack extends cdk.Stack {
+export class BrowserUseAgentRuntimeStack extends cdk.Stack {
   public readonly runtime: agentcore.CfnRuntime
   public readonly runtimeArn: string
 
-  constructor(scope: Construct, id: string, props?: ResearchAgentRuntimeStackProps) {
+  constructor(scope: Construct, id: string, props?: BrowserUseAgentRuntimeStackProps) {
     super(scope, id, props)
 
     const projectName = props?.projectName || 'strands-agent-chatbot'
     const environment = props?.environment || 'dev'
 
     // ============================================================
-    // Step 1: ECR Repository for Research Agent
+    // Step 1: ECR Repository for Browser Use Agent
     // ============================================================
     const useExistingEcr = process.env.USE_EXISTING_ECR === 'true'
     const repository = useExistingEcr
       ? ecr.Repository.fromRepositoryName(
           this,
-          'ResearchAgentRepository',
-          `${projectName}-research-agent`
+          'BrowserUseAgentRepository',
+          `${projectName}-browser-use-agent`
         )
-      : new ecr.Repository(this, 'ResearchAgentRepository', {
-          repositoryName: `${projectName}-research-agent`,
+      : new ecr.Repository(this, 'BrowserUseAgentRepository', {
+          repositoryName: `${projectName}-browser-use-agent`,
           removalPolicy: cdk.RemovalPolicy.RETAIN,
           imageScanOnPush: true,
           lifecycleRules: [
@@ -55,9 +55,9 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
     // ============================================================
     // Step 2: IAM Execution Role for AgentCore Runtime
     // ============================================================
-    const executionRole = new iam.Role(this, 'ResearchAgentExecutionRole', {
+    const executionRole = new iam.Role(this, 'BrowserUseAgentExecutionRole', {
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
-      description: 'Execution role for Research Agent AgentCore Runtime',
+      description: 'Execution role for Browser Use Agent AgentCore Runtime',
     })
 
     // ECR Access
@@ -101,7 +101,7 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
       })
     )
 
-    // Bedrock Model Access (for research agent's LLM calls)
+    // Bedrock Model Access (for browser-use agent's LLM calls)
     executionRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'BedrockModelInvocation',
@@ -130,42 +130,45 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
       })
     )
 
-    // Code Interpreter Access (for chart generation)
-    // Same permissions as main chatbot agent
+    // Browser Access (AgentCore Browser for browser automation)
+    // browser-use will connect to AgentCore Browser CDP endpoint
     executionRole.addToPolicy(
       new iam.PolicyStatement({
-        sid: 'CodeInterpreterAccess',
+        sid: 'CustomBrowserAccess',
         effect: iam.Effect.ALLOW,
         actions: [
-          'bedrock-agentcore:CreateCodeInterpreter',
-          'bedrock-agentcore:StartCodeInterpreterSession',
-          'bedrock-agentcore:InvokeCodeInterpreter',
-          'bedrock-agentcore:StopCodeInterpreterSession',
-          'bedrock-agentcore:DeleteCodeInterpreter',
-          'bedrock-agentcore:ListCodeInterpreters',
-          'bedrock-agentcore:GetCodeInterpreter',
-          'bedrock-agentcore:GetCodeInterpreterSession',
-          'bedrock-agentcore:ListCodeInterpreterSessions',
+          'bedrock-agentcore:CreateBrowser',
+          'bedrock-agentcore:StartBrowserSession',
+          'bedrock-agentcore:GetBrowserSession',
+          'bedrock-agentcore:UpdateBrowserSession',
+          'bedrock-agentcore:UpdateBrowserStream',
+          'bedrock-agentcore:StopBrowserSession',
+          'bedrock-agentcore:DeleteBrowser',
+          'bedrock-agentcore:ListBrowsers',
+          'bedrock-agentcore:GetBrowser',
+          'bedrock-agentcore:ListBrowserSessions',
+          'bedrock-agentcore:ConnectBrowserAutomationStream', // WebSocket automation stream (NovaAct)
         ],
         resources: [
-          `arn:aws:bedrock-agentcore:*:aws:code-interpreter/*`,
-          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:code-interpreter/*`,
-          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:code-interpreter-custom/*`,
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:browser/*`,        // System browser
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:browser-custom/*`, // Custom browser
         ],
       })
     )
 
-    // S3 Access for Source and Chart Storage
+    // DynamoDB Access (for storing browser session metadata)
     executionRole.addToPolicy(
       new iam.PolicyStatement({
-        sid: 'S3BucketAccess',
+        sid: 'DynamoDBSessionAccess',
         effect: iam.Effect.ALLOW,
-        actions: ['s3:PutObject', 's3:GetObject', 's3:ListBucket'],
+        actions: [
+          'dynamodb:Query',
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+        ],
         resources: [
-          `arn:aws:s3:::${projectName}-research-src-${this.account}-${this.region}`,
-          `arn:aws:s3:::${projectName}-research-src-${this.account}-${this.region}/*`,
-          `arn:aws:s3:::${projectName}-research-charts-${this.account}-${this.region}`,
-          `arn:aws:s3:::${projectName}-research-charts-${this.account}-${this.region}/*`,
+          `arn:aws:dynamodb:${this.region}:${this.account}:table/${projectName}-users-v2`,
         ],
       })
     )
@@ -173,8 +176,8 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
     // ============================================================
     // Step 3: S3 Bucket for CodeBuild Source
     // ============================================================
-    const sourceBucket = new s3.Bucket(this, 'ResearchAgentSourceBucket', {
-      bucketName: `${projectName}-research-src-${this.account}-${this.region}`,
+    const sourceBucket = new s3.Bucket(this, 'BrowserUseAgentSourceBucket', {
+      bucketName: `${projectName}-browser-use-src-${this.account}-${this.region}`,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
       lifecycleRules: [
@@ -185,35 +188,12 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
       ],
     })
 
-    // Chart Storage Bucket for Research Agent
-    const chartBucket = new s3.Bucket(this, 'ResearchChartStorageBucket', {
-      bucketName: `${projectName}-research-charts-${this.account}-${this.region}`,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-      versioned: false,
-      publicReadAccess: false,  // Presigned URLs work without public access
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,  // Block public access, use presigned URLs
-      lifecycleRules: [
-        {
-          expiration: cdk.Duration.days(90),
-          id: 'DeleteOldCharts',
-        },
-      ],
-      cors: [
-        {
-          allowedMethods: [s3.HttpMethods.GET],
-          allowedOrigins: ['*'],
-          allowedHeaders: ['*'],
-          maxAge: 3600,
-        },
-      ],
-    })
-
     // ============================================================
     // Step 4: CodeBuild Project
     // ============================================================
-    const codeBuildRole = new iam.Role(this, 'ResearchAgentCodeBuildRole', {
+    const codeBuildRole = new iam.Role(this, 'BrowserUseAgentCodeBuildRole', {
       assumedBy: new iam.ServicePrincipal('codebuild.amazonaws.com'),
-      description: 'Build role for Research Agent container',
+      description: 'Build role for Browser Use Agent container',
     })
 
     // ECR Permissions
@@ -257,9 +237,9 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
       })
     )
 
-    const buildProject = new codebuild.Project(this, 'ResearchAgentBuildProject', {
-      projectName: `${projectName}-research-agent-builder`,
-      description: 'Builds ARM64 container image for Research Agent A2A Runtime',
+    const buildProject = new codebuild.Project(this, 'BrowserUseAgentBuildProject', {
+      projectName: `${projectName}-browser-use-agent-builder`,
+      description: 'Builds ARM64 container image for Browser Use Agent A2A Runtime',
       role: codeBuildRole,
       environment: {
         buildImage: codebuild.LinuxBuildImage.AMAZON_LINUX_2_ARM_3,
@@ -268,7 +248,7 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
       },
       source: codebuild.Source.s3({
         bucket: sourceBucket,
-        path: 'research-agent-source/',
+        path: 'browser-use-agent-source/',
       }),
       buildSpec: codebuild.BuildSpec.fromObject({
         version: '0.2',
@@ -281,9 +261,9 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
           },
           build: {
             commands: [
-              'echo Building Research Agent Docker image for ARM64...',
-              'docker build --platform linux/arm64 -t research-agent:latest .',
-              `docker tag research-agent:latest ${repository.repositoryUri}:latest`,
+              'echo Building Browser Use Agent Docker image for ARM64...',
+              'docker build --platform linux/arm64 -t browser-use-agent:latest .',
+              `docker tag browser-use-agent:latest ${repository.repositoryUri}:latest`,
             ],
           },
           post_build: {
@@ -300,8 +280,8 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
     // ============================================================
     // Step 5: Upload Source to S3
     // ============================================================
-    const agentSourcePath = '..'  // Parent directory (research-agent/)
-    const agentSourceUpload = new s3deploy.BucketDeployment(this, 'ResearchAgentSourceUpload', {
+    const agentSourcePath = '..'  // Parent directory (browser-use-agent/)
+    const agentSourceUpload = new s3deploy.BucketDeployment(this, 'BrowserUseAgentSourceUpload', {
       sources: [
         s3deploy.Source.asset(agentSourcePath, {
           exclude: [
@@ -319,7 +299,7 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
         }),
       ],
       destinationBucket: sourceBucket,
-      destinationKeyPrefix: 'research-agent-source/',
+      destinationKeyPrefix: 'browser-use-agent-source/',
       prune: false,
       retainOnDelete: false,
     })
@@ -327,14 +307,14 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
     // ============================================================
     // Step 6: Trigger CodeBuild
     // ============================================================
-    const buildTrigger = new cr.AwsCustomResource(this, 'TriggerResearchAgentCodeBuild', {
+    const buildTrigger = new cr.AwsCustomResource(this, 'TriggerBrowserUseAgentCodeBuild', {
       onCreate: {
         service: 'CodeBuild',
         action: 'startBuild',
         parameters: {
           projectName: buildProject.projectName,
         },
-        physicalResourceId: cr.PhysicalResourceId.of(`research-agent-build-${Date.now()}`),
+        physicalResourceId: cr.PhysicalResourceId.of(`browser-use-agent-build-${Date.now()}`),
       },
       onUpdate: {
         service: 'CodeBuild',
@@ -342,7 +322,7 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
         parameters: {
           projectName: buildProject.projectName,
         },
-        physicalResourceId: cr.PhysicalResourceId.of(`research-agent-build-${Date.now()}`),
+        physicalResourceId: cr.PhysicalResourceId.of(`browser-use-agent-build-${Date.now()}`),
       },
       policy: cr.AwsCustomResourcePolicy.fromStatements([
         new iam.PolicyStatement({
@@ -359,7 +339,7 @@ export class ResearchAgentRuntimeStack extends cdk.Stack {
     // ============================================================
     // Step 7: Wait for Build Completion
     // ============================================================
-    const buildWaiterFunction = new lambda.Function(this, 'ResearchAgentBuildWaiter', {
+    const buildWaiterFunction = new lambda.Function(this, 'BrowserUseAgentBuildWaiter', {
       runtime: lambda.Runtime.NODEJS_22_X,
       handler: 'index.handler',
       code: lambda.Code.fromInline(`
@@ -463,7 +443,7 @@ async function sendResponse(event, status, data, reason) {
       })
     )
 
-    const buildWaiter = new cdk.CustomResource(this, 'ResearchAgentBuildWaiterResource', {
+    const buildWaiter = new cdk.CustomResource(this, 'BrowserUseAgentBuildWaiterResource', {
       serviceToken: buildWaiterFunction.functionArn,
       properties: {
         BuildId: buildTrigger.getResponseField('build.id'),
@@ -473,12 +453,22 @@ async function sendResponse(event, status, data, reason) {
     buildWaiter.node.addDependency(buildTrigger)
 
     // ============================================================
-    // Step 8: Create AgentCore Runtime
+    // Step 8: Lookup Custom Browser ID from Parameter Store
     // ============================================================
-    const runtimeName = projectName.replace(/-/g, '_') + '_research_agent_runtime'
-    const runtime = new agentcore.CfnRuntime(this, 'ResearchAgentRuntime', {
+    // Browser Use Agent needs same Custom Browser ID as builtin browser tools
+    const browserIdParamName = `/${projectName}/${environment}/agentcore/browser-id`
+    const browserId = ssm.StringParameter.valueForStringParameter(
+      this,
+      browserIdParamName
+    )
+
+    // ============================================================
+    // Step 9: Create AgentCore Runtime
+    // ============================================================
+    const runtimeName = projectName.replace(/-/g, '_') + '_browser_use_agent_runtime'
+    const runtime = new agentcore.CfnRuntime(this, 'BrowserUseAgentRuntime', {
       agentRuntimeName: runtimeName,
-      description: 'Research Agent A2A Runtime - Web research and report generation',
+      description: 'Browser Use Agent A2A Runtime - Autonomous browser automation',
       roleArn: executionRole.roleArn,
 
       // Container configuration
@@ -488,12 +478,12 @@ async function sendResponse(event, status, data, reason) {
         },
       },
 
-      // Network configuration - PUBLIC for internet access (web search, Wikipedia)
+      // Network configuration - PUBLIC for internet access (browser automation)
       networkConfiguration: {
         networkMode: 'PUBLIC',
       },
 
-      // Protocol configuration - A2A protocol (Strands A2A Server)
+      // Protocol configuration - A2A protocol (FastAPI A2A Server)
       protocolConfiguration: 'A2A',
 
       // Environment variables
@@ -503,15 +493,18 @@ async function sendResponse(event, status, data, reason) {
         ENVIRONMENT: environment,
         AWS_DEFAULT_REGION: this.region,
         AWS_REGION: this.region,
-        CHART_STORAGE_BUCKET: chartBucket.bucketName,
+        // Custom Browser ID (same as builtin browser tools)
+        BROWSER_ID: browserId,
         // Workaround for OTEL botocore instrumentation bug (fixed in next ADOT release)
         // See: https://sim.amazon.com/issues/apm-telegen-2758
         OTEL_PYTHON_DISABLED_INSTRUMENTATIONS: 'boto,botocore',
+        // Force runtime update when code changes
+        RUNTIME_VERSION: '1.0.1',
       },
 
       tags: {
         Environment: environment,
-        Application: `${projectName}-research-agent`,
+        Application: `${projectName}-browser-use-agent`,
         Type: 'A2A-Agent',
       },
     })
@@ -525,19 +518,19 @@ async function sendResponse(event, status, data, reason) {
     this.runtimeArn = runtime.attrAgentRuntimeArn
 
     // ============================================================
-    // Step 9: Store Runtime Information in Parameter Store
+    // Step 10: Store Runtime Information in Parameter Store
     // ============================================================
-    new ssm.StringParameter(this, 'ResearchAgentRuntimeArnParameter', {
-      parameterName: `/${projectName}/${environment}/a2a/research-agent-runtime-arn`,
+    new ssm.StringParameter(this, 'BrowserUseAgentRuntimeArnParameter', {
+      parameterName: `/${projectName}/${environment}/a2a/browser-use-agent-runtime-arn`,
       stringValue: runtime.attrAgentRuntimeArn,
-      description: 'Research Agent AgentCore Runtime ARN',
+      description: 'Browser Use Agent AgentCore Runtime ARN',
       tier: ssm.ParameterTier.STANDARD,
     })
 
-    new ssm.StringParameter(this, 'ResearchAgentRuntimeIdParameter', {
-      parameterName: `/${projectName}/${environment}/a2a/research-agent-runtime-id`,
+    new ssm.StringParameter(this, 'BrowserUseAgentRuntimeIdParameter', {
+      parameterName: `/${projectName}/${environment}/a2a/browser-use-agent-runtime-id`,
       stringValue: runtime.attrAgentRuntimeId,
-      description: 'Research Agent AgentCore Runtime ID',
+      description: 'Browser Use Agent AgentCore Runtime ID',
       tier: ssm.ParameterTier.STANDARD,
     })
 
@@ -549,29 +542,29 @@ async function sendResponse(event, status, data, reason) {
     // ============================================================
     new cdk.CfnOutput(this, 'RepositoryUri', {
       value: repository.repositoryUri,
-      description: 'ECR Repository URI for Research Agent container',
-      exportName: `${projectName}-research-agent-repo-uri`,
+      description: 'ECR Repository URI for Browser Use Agent container',
+      exportName: `${projectName}-browser-use-agent-repo-uri`,
     })
 
     new cdk.CfnOutput(this, 'RuntimeArn', {
       value: runtime.attrAgentRuntimeArn,
-      description: 'Research Agent AgentCore Runtime ARN',
-      exportName: `${projectName}-research-agent-runtime-arn`,
+      description: 'Browser Use Agent AgentCore Runtime ARN',
+      exportName: `${projectName}-browser-use-agent-runtime-arn`,
     })
 
     new cdk.CfnOutput(this, 'RuntimeId', {
       value: runtime.attrAgentRuntimeId,
-      description: 'Research Agent AgentCore Runtime ID',
-      exportName: `${projectName}-research-agent-runtime-id`,
+      description: 'Browser Use Agent AgentCore Runtime ID',
+      exportName: `${projectName}-browser-use-agent-runtime-id`,
     })
 
     new cdk.CfnOutput(this, 'ParameterStorePrefix', {
       value: `/${projectName}/${environment}/a2a`,
-      description: 'Parameter Store prefix for Research Agent configuration',
+      description: 'Parameter Store prefix for Browser Use Agent configuration',
     })
 
     new cdk.CfnOutput(this, 'IntegrationNote', {
-      value: 'Main agent can invoke Research Agent via InvokeAgentRuntime API using the Runtime ARN',
+      value: 'Main agent can invoke Browser Use Agent via InvokeAgentRuntime API using the Runtime ARN',
       description: 'Integration Information',
     })
   }

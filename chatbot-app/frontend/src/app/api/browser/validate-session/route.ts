@@ -24,16 +24,28 @@ export async function GET(request: NextRequest) {
     const sessionId = searchParams.get('sessionId');
     let browserId = searchParams.get('browserId');
 
-    // Fallback to environment variable if browserId not provided
-    if (!browserId) {
-      browserId = process.env.BROWSER_ID || null;
-    }
-
-    if (!sessionId || !browserId) {
+    if (!sessionId) {
       return NextResponse.json(
         {
           isValid: false,
-          error: 'Missing sessionId or browserId parameter'
+          error: 'Missing sessionId parameter'
+        },
+        { status: 400 }
+      );
+    }
+
+    // If browserId not provided, try to get from environment variable
+    if (!browserId) {
+      browserId = process.env.BROWSER_ID || null;
+      console.log('[validate-session] browserId not in request, using BROWSER_ID from env:', browserId);
+    }
+
+    // If still no browserId, cannot validate
+    if (!browserId) {
+      return NextResponse.json(
+        {
+          isValid: false,
+          error: 'browserId required but not found in request or environment'
         },
         { status: 400 }
       );

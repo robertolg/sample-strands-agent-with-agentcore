@@ -38,7 +38,7 @@ export function ToolSidebar({
   onSessionListRefresh,
   onGatewayToolsChange,
 }: ToolSidebarProps) {
-  const { setOpenMobile } = useSidebar();
+  const { setOpenMobile, isMobile } = useSidebar();
 
   // Use custom hooks
   const { chatSessions, isLoadingSessions, deleteSession } = useChatSessions({
@@ -150,7 +150,13 @@ export function ToolSidebar({
       {/* Footer */}
       <SidebarFooter className="flex-shrink-0 border-t border-sidebar-border/50">
         <div className="text-xs text-sidebar-foreground/60 text-center">
-          Press <kbd className="px-1.5 py-0.5 bg-sidebar-accent rounded text-xs font-mono">⌘B</kbd> to toggle
+          {isMobile ? (
+            'Tap outside to close'
+          ) : (
+            <>
+              Press <kbd className="px-1.5 py-0.5 bg-sidebar-accent rounded text-xs font-mono">⌘B</kbd> to toggle
+            </>
+          )}
         </div>
       </SidebarFooter>
     </Sidebar>

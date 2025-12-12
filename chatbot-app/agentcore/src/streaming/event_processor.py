@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+import logging
 from typing import AsyncGenerator, Dict, Any
 from .event_formatter import StreamEventFormatter
 
@@ -8,6 +9,8 @@ from .event_formatter import StreamEventFormatter
 from opentelemetry import trace, baggage, context
 from opentelemetry.trace import get_tracer
 from opentelemetry.metrics import get_meter
+
+logger = logging.getLogger(__name__)
 
 class StreamEventProcessor:
     """Processes streaming events from the agent and formats them for SSE"""
@@ -47,8 +50,6 @@ class StreamEventProcessor:
             unit="1"
         )
         
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info("OpenTelemetry metrics initialized for StreamEventProcessor")
     
     def _get_current_timestamp(self) -> str:
@@ -121,8 +122,9 @@ class StreamEventProcessor:
     async def process_stream(self, agent, message: str, file_paths: list = None, session_id: str = None, invocation_state: dict = None) -> AsyncGenerator[str, None]:
         """Process streaming events from agent with proper error handling and event separation"""
 
-        # Store current session ID for tools to use
+        # Store current session ID and invocation_state for tools to use
         self.current_session_id = session_id
+        self.invocation_state = invocation_state or {}
 
         # Reset seen tool uses for each new stream
         self.seen_tool_uses.clear()
@@ -166,8 +168,6 @@ class StreamEventProcessor:
                 # Check if session was cancelled (stop button clicked)
                 if hasattr(agent, 'session_manager') and hasattr(agent.session_manager, 'cancelled'):
                     if agent.session_manager.cancelled:
-                        import logging
-                        logger = logging.getLogger(__name__)
                         logger.info(f"🛑 Stream cancelled for session {session_id} - stopping event processing")
                         # Send stop event and exit stream
                         yield self.formatter.create_response_event("\n\n*Session stopped by user*")
@@ -175,7 +175,21 @@ class StreamEventProcessor:
                 while self.pending_events:
                     pending_event = self.pending_events.pop(0)
                     yield pending_event
-                
+
+                # Check for browser session ARN in invocation_state (for Live View)
+                # This is set by A2A tool callback when browser_session_arn artifact is received
+                if hasattr(self, 'invocation_state') and self.invocation_state:
+                    browser_session_arn = self.invocation_state.get('browser_session_arn')
+                    if browser_session_arn and not self.invocation_state.get('_browser_session_emitted'):
+                        # Mark as emitted to avoid duplicate events
+                        self.invocation_state['_browser_session_emitted'] = True
+                        import logging as _logging
+                        _logger = _logging.getLogger(__name__)
+                        _logger.info(f"🔴 [Live View] Emitting browser session from invocation_state: {browser_session_arn}")
+                        yield self.formatter.create_metadata_event({
+                            "browserSessionId": browser_session_arn
+                        })
+
                 # Handle final result
                 if "result" in event:
                     final_result = event["result"]
@@ -183,8 +197,6 @@ class StreamEventProcessor:
                     # Check for interrupt (HITL - Human-in-the-loop)
                     if hasattr(final_result, 'stop_reason') and final_result.stop_reason == "interrupt":
                         if hasattr(final_result, 'interrupts') and final_result.interrupts:
-                            import logging
-                            logger = logging.getLogger(__name__)
                             logger.info(f"🔔 Interrupt detected: {len(final_result.interrupts)} interrupt(s)")
 
                             # Log interrupt details
@@ -205,8 +217,6 @@ class StreamEventProcessor:
                     # Extract token usage from Strands SDK metrics
                     usage = None
                     try:
-                        import logging
-                        logger = logging.getLogger(__name__)
 
                         if hasattr(final_result, 'metrics') and hasattr(final_result.metrics, 'accumulated_usage'):
                             accumulated_usage = final_result.metrics.accumulated_usage
@@ -235,8 +245,6 @@ class StreamEventProcessor:
 
                                 logger.info(f"[Token Usage] ✅ Total - Input: {usage['inputTokens']}, Output: {usage['outputTokens']}, Total: {usage['totalTokens']}")
                     except Exception as e:
-                        import logging
-                        logger = logging.getLogger(__name__)
                         logger.error(f"[Token Usage] Error extracting token usage: {e}")
                         # Continue without usage data
 
@@ -367,13 +375,45 @@ class StreamEventProcessor:
                         yield self.formatter.create_tool_use_event(tool_use_copy)
                         await asyncio.sleep(0.1)
                 
+                # Handle tool streaming events (from async generator tools)
+                elif event.get("tool_stream_event"):
+                    tool_stream = event["tool_stream_event"]
+                    stream_data = tool_stream.get("data", {})
+
+                    # Check if this is browser session detected event
+                    if isinstance(stream_data, dict) and stream_data.get("type") == "browser_session_detected":
+                        browser_session_id = stream_data.get("browserSessionId")
+                        browser_id = stream_data.get("browserId")
+                        logger.info(f"[Live View] 🔴 Received browser session from tool stream: {browser_session_id}, browserId: {browser_id}")
+
+                        # Update invocation_state so it's available for tool result processing
+                        if browser_session_id:
+                            self.invocation_state['browser_session_arn'] = browser_session_id
+                            if browser_id:
+                                self.invocation_state['browser_id'] = browser_id
+                            logger.info(f"[Live View] Stored browser session in invocation_state for immediate Live View")
+
+                            # Send metadata event to frontend for immediate Live View
+                            metadata = {"browserSessionId": browser_session_id}
+                            if browser_id:
+                                metadata["browserId"] = browser_id
+
+                            yield self.formatter.create_metadata_event(metadata)
+                            logger.info(f"[Live View] ✅ Sent metadata event to frontend with browserSessionId and browserId")
+
+                        # Also send a response message
+                        yield self.formatter.create_response_event(f"\n\n*{stream_data.get('message', 'Browser session started')}*\n\n")
+                    else:
+                        # Other tool stream events (e.g., progress)
+                        logger.debug(f"[Tool Stream] Received: {stream_data}")
+
                 # Handle lifecycle events
                 elif event.get("init_event_loop"):
                     yield self.formatter.create_init_event()
-                
+
                 elif event.get("start_event_loop"):
                     yield self.formatter.create_thinking_event()
-                
+
                 # Handle tool results from message events
                 elif event.get("message"):
                     async for result in self._process_message_event(event):
@@ -390,8 +430,6 @@ class StreamEventProcessor:
             
         except Exception as e:
             # Log the error for debugging but don't crash
-            import logging
-            logger = logging.getLogger(__name__)
             logger.debug(f"Stream processing error: {e}")
             yield self.formatter.create_error_event(f"Sorry, I encountered an error: {str(e)}")
             
@@ -414,7 +452,7 @@ class StreamEventProcessor:
     async def _process_message_event(self, event: Dict[str, Any]) -> AsyncGenerator[str, None]:
         """Process message events that may contain tool results"""
         message_obj = event["message"]
-        
+
         # Handle both dict and object formats
         if hasattr(message_obj, 'content'):
             content = message_obj.content
@@ -422,12 +460,15 @@ class StreamEventProcessor:
             content = message_obj['content']
         else:
             content = None
-        
+
         if content:
             for content_item in content:
                 if isinstance(content_item, dict) and "toolResult" in content_item:
                     tool_result = content_item["toolResult"]
-                    
+
+                    # Note: browserSessionId is now handled via tool stream events (immediate)
+                    # No need to extract from tool result (too late)
+
                     # Set context before tool execution and cleanup after
                     tool_use_id = tool_result.get("toolUseId")
                     if tool_use_id:
@@ -437,16 +478,37 @@ class StreamEventProcessor:
                             if context:
                                 # Set as current context during result processing
                                 tool_context_manager.set_current_context(context)
-                                
+
+                                # Add browser session metadata from invocation_state (for Live View)
+                                if hasattr(self, 'invocation_state') and 'browser_session_arn' in self.invocation_state:
+                                    if "metadata" not in tool_result:
+                                        tool_result["metadata"] = {}
+                                    tool_result["metadata"]["browserSessionId"] = self.invocation_state['browser_session_arn']
+                                    logger.info(f"[Live View] Added browserSessionId to tool result metadata: {self.invocation_state['browser_session_arn']}")
+
                                 # Process the tool result
                                 yield self.formatter.create_tool_result_event(tool_result)
-                                
+
                                 # Clean up context after processing
                                 tool_context_manager.clear_current_context()
                                 await tool_context_manager.cleanup_context(tool_use_id)
                             else:
+                                # Add browser session metadata even if no context
+                                if hasattr(self, 'invocation_state') and 'browser_session_arn' in self.invocation_state:
+                                    if "metadata" not in tool_result:
+                                        tool_result["metadata"] = {}
+                                    tool_result["metadata"]["browserSessionId"] = self.invocation_state['browser_session_arn']
+                                    logger.info(f"[Live View] Added browserSessionId to tool result metadata: {self.invocation_state['browser_session_arn']}")
+
                                 yield self.formatter.create_tool_result_event(tool_result)
                         except ImportError:
+                            # Add browser session metadata even if import fails
+                            if hasattr(self, 'invocation_state') and 'browser_session_arn' in self.invocation_state:
+                                if "metadata" not in tool_result:
+                                    tool_result["metadata"] = {}
+                                tool_result["metadata"]["browserSessionId"] = self.invocation_state['browser_session_arn']
+                                logger.info(f"[Live View] Added browserSessionId to tool result metadata: {self.invocation_state['browser_session_arn']}")
+
                             yield self.formatter.create_tool_result_event(tool_result)
                     else:
                         yield self.formatter.create_tool_result_event(tool_result)
@@ -542,5 +604,5 @@ class StreamEventProcessor:
         # If name becomes empty, use default
         if not sanitized:
             sanitized = 'document'
-        
+
         return sanitized

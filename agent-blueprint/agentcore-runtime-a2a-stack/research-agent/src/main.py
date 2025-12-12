@@ -136,8 +136,24 @@ class MetadataAwareExecutor(StrandsA2AExecutor):
             # Use agent.stream_async with invocation_state
             async for event in agent.stream_async(content_blocks, invocation_state=invocation_state):
                 await self._handle_streaming_event(event, updater)
-        except Exception:
-            logger.exception("Error in streaming execution")
+        except Exception as e:
+            error_msg = str(e)
+            # Check for Bedrock service errors
+            if "serviceUnavailableException" in error_msg or "ServiceUnavailable" in error_msg:
+                logger.error(f"Bedrock service unavailable: {error_msg}")
+                # Add error artifact before failing
+                await updater.add_artifact(
+                    [Part(root=TextPart(text=f"Error: Bedrock service is temporarily unavailable. Please try again in a few moments."))],
+                    name="error"
+                )
+            elif "ThrottlingException" in error_msg:
+                logger.error(f"Bedrock throttling: {error_msg}")
+                await updater.add_artifact(
+                    [Part(root=TextPart(text=f"Error: Request was throttled. Please try again later."))],
+                    name="error"
+                )
+            else:
+                logger.exception("Error in streaming execution")
             raise
 
     async def _handle_agent_result(self, result, updater: TaskUpdater) -> None:
@@ -377,12 +393,25 @@ def create_agent(model_id: Optional[str] = None) -> Agent:
     Args:
         model_id: Bedrock model ID to use (defaults to MODEL_ID from env)
     """
+    from botocore.config import Config
+
     # Use provided model_id or fall back to environment variable
     effective_model_id = model_id or MODEL_ID
 
+    # Configure retry for transient Bedrock errors (serviceUnavailableException)
+    retry_config = Config(
+        retries={
+            'max_attempts': 10,
+            'mode': 'adaptive'  # Adaptive retry with exponential backoff
+        },
+        connect_timeout=30,
+        read_timeout=120
+    )
+
     bedrock_model = BedrockModel(
         model_id=effective_model_id,
-        region_name=AWS_REGION
+        region_name=AWS_REGION,
+        boto_client_config=retry_config
     )
 
     logger.info(f"Creating agent with model: {effective_model_id}")

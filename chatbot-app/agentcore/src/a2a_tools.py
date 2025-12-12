@@ -11,7 +11,7 @@ import boto3
 import logging
 import os
 import asyncio
-from typing import Optional
+from typing import Optional, Dict, Any, AsyncGenerator
 from urllib.parse import quote
 from uuid import uuid4
 from strands.tools import tool
@@ -19,7 +19,7 @@ from strands.types.tools import ToolContext
 
 import httpx
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
-from a2a.types import Message, Part, Role, TextPart
+from a2a.types import Message, Part, Role, TextPart, AgentCard
 
 # Import SigV4 auth for IAM authentication
 from agent.gateway_auth import get_sigv4_auth
@@ -35,6 +35,11 @@ A2A_AGENTS_CONFIG = {
         "name": "Research Agent",
         "description": "Web research agent that searches multiple sources and generates structured markdown reports with citations. Clarifies scope if request is too broad.",
         "runtime_arn_ssm": "/strands-agent-chatbot/dev/a2a/research-agent-runtime-arn",
+    },
+    "agentcore_browser-use-agent": {
+        "name": "Browser Use Agent",
+        "description": "Autonomous browser automation agent that can navigate websites, interact with elements, fill forms, and extract information. Executes multi-step browser tasks using AI-driven navigation.",
+        "runtime_arn_ssm": "/strands-agent-chatbot/dev/a2a/browser-use-agent-runtime-arn",
     },
 }
 
@@ -98,9 +103,9 @@ async def send_a2a_message(
     session_id: Optional[str] = None,
     region: str = "us-west-2",
     metadata: Optional[dict] = None
-) -> Optional[str]:
+) -> AsyncGenerator[Dict[str, Any], None]:
     """
-    Send message to A2A agent on AgentCore Runtime
+    Stream messages from A2A agent on AgentCore Runtime (ASYNC GENERATOR)
 
     Args:
         agent_id: Agent identifier (e.g., "agentcore_research-agent")
@@ -109,8 +114,10 @@ async def send_a2a_message(
         region: AWS region
         metadata: Additional payload to send (user_id, preferences, context, etc.)
 
-    Returns:
-        Agent response text
+    Yields:
+        Events from A2A agent:
+        - {"type": "browser_session_detected", "browserSessionId": "...", "message": "..."}  # Immediate
+        - {"status": "success", "content": [...]}  # Final result
 
     Example metadata:
         {
@@ -124,6 +131,7 @@ async def send_a2a_message(
     try:
         # Check for local testing mode
         local_runtime_url = os.environ.get('LOCAL_RESEARCH_AGENT_URL')
+        agent_arn = None
 
         if local_runtime_url:
             # Local testing: use localhost URL
@@ -133,7 +141,11 @@ async def send_a2a_message(
             # Production: use AgentCore Runtime
             agent_arn = get_cached_agent_arn(agent_id, region)
             if not agent_arn:
-                return f"Error: Could not find agent ARN for {agent_id}"
+                yield {
+                    "status": "error",
+                    "content": [{"text": f"Error: Could not find agent ARN for {agent_id}"}]
+                }
+                return
 
             escaped_arn = quote(agent_arn, safe='')
             runtime_url = f"https://bedrock-agentcore.{region}.amazonaws.com/runtimes/{escaped_arn}/invocations/"
@@ -159,50 +171,44 @@ async def send_a2a_message(
         httpx_client.headers.update(headers)
         logger.info(f"  Session ID: {session_id}")
 
-        # Get or cache agent card
-        if agent_arn not in _cache['agent_cards']:
-            logger.info(f"Fetching runtime URL and agent card for ARN: {agent_arn}")
+        # Get or cache agent card (skip for local testing)
+        if agent_arn and agent_arn not in _cache['agent_cards']:
+            logger.info(f"Fetching agent card for ARN: {agent_arn}")
 
             try:
-                # Step 1: Use boto3 SDK to get actual runtime URL from agent card
+                # ✅ Use boto3 SDK to get agent card directly (already contains all info)
                 bedrock_agentcore = boto3.client('bedrock-agentcore', region_name=region)
                 response = await asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: bedrock_agentcore.get_agent_card(agentRuntimeArn=agent_arn)
                 )
 
-                # Extract actual runtime URL from agent card response
-                agent_card_data = response.get('agentCard', {})
-                actual_runtime_url = agent_card_data.get('url')
+                # boto3 returns complete agent card - no need for A2ACardResolver!
+                agent_card_dict = response.get('agentCard', {})
 
-                if actual_runtime_url:
-                    # Remove trailing slash
-                    if actual_runtime_url.endswith('/'):
-                        actual_runtime_url = actual_runtime_url[:-1]
-                    runtime_url = actual_runtime_url
-                    logger.info(f"Got runtime URL from boto3: {runtime_url}")
-                else:
-                    logger.warning(f"No URL in boto3 agent card response, using constructed URL: {runtime_url}")
+                if not agent_card_dict:
+                    raise ValueError(f"No agent card found in boto3 response")
 
-                # Step 2: Use A2ACardResolver to get proper agent card object
-                # Now we use the correct runtime URL (not the ARN-encoded one)
-                logger.info(f"Fetching agent card via A2ACardResolver from: {runtime_url}")
-                resolver = A2ACardResolver(httpx_client=httpx_client, base_url=runtime_url)
+                logger.info(f"✅ Retrieved agent card from boto3 for {agent_id}")
+                logger.info(f"   URL: {agent_card_dict.get('url')}")
+                logger.info(f"   Capabilities: {agent_card_dict.get('capabilities')}")
 
-                _cache['agent_cards'][agent_arn] = await asyncio.wait_for(
-                    resolver.get_agent_card(),
-                    timeout=60.0  # 60 second timeout for agent card fetch
-                )
-                logger.info(f"✅ Retrieved agent card for {agent_id}")
+                # ✅ Convert dict to AgentCard object
+                agent_card = AgentCard(**agent_card_dict)
 
-            except asyncio.TimeoutError:
-                logger.error(f"Timeout fetching agent card after 60s")
-                raise
+                # Cache the agent card object
+                _cache['agent_cards'][agent_arn] = agent_card
+
             except Exception as e:
                 logger.error(f"Error fetching agent card: {e}")
                 raise
 
-        agent_card = _cache['agent_cards'][agent_arn]
+        # Get agent card from cache (or create dummy for local testing)
+        if agent_arn:
+            agent_card = _cache['agent_cards'][agent_arn]
+        else:
+            # Local testing mode: create minimal agent card
+            agent_card = AgentCard(url=runtime_url, capabilities={})
 
         # Create A2A client with streaming enabled
         config = ClientConfig(httpx_client=httpx_client, streaming=True)
@@ -210,47 +216,36 @@ async def send_a2a_message(
         client = factory.create(agent_card)
 
         # Create message with metadata in Message.metadata
-        # Note: Streaming client expects Message directly, not SendMessageRequest
-        # The streaming client interface wraps it internally
         msg = Message(
             kind="message",
             role=Role.user,
             parts=[Part(TextPart(kind="text", text=message))],
             message_id=uuid4().hex,
-            metadata=metadata  # Put metadata here for streaming client
+            metadata=metadata
         )
 
         if metadata:
             logger.info(f"  Message metadata: {metadata}")
 
         response_text = ""
+        browser_session_arn = None  # For browser-use agent live view
+        browser_id_from_stream = None  # Browser ID from artifact
+        browser_session_event_sent = False  # Track if we've sent the event
         async with asyncio.timeout(AGENT_TIMEOUT):
             async for event in client.send_message(msg):
                 logger.debug(f"Received A2A event type: {type(event).__name__}")
 
                 if isinstance(event, Message):
-                    # Extract text and images from Message response (multimodal support)
-                    response_text = ""
-                    response_images = []
-
+                    # Extract text from Message response
                     if event.parts and len(event.parts) > 0:
                         for part in event.parts:
-                            # Extract text
                             if hasattr(part, 'text'):
                                 response_text += part.text
                             elif hasattr(part, 'root') and hasattr(part.root, 'text'):
                                 response_text += part.root.text
-                            # Extract images (if A2A supports image content)
-                            elif hasattr(part, 'image'):
-                                response_images.append(part.image)
-                            elif hasattr(part, 'root') and hasattr(part.root, 'image'):
-                                response_images.append(part.root.image)
 
-                    logger.info(f"✅ A2A Message received ({len(response_text)} chars, {len(response_images)} images)")
-
-                    # TODO: Handle images - for now just return text
-                    # In future, could return structured format: {"text": ..., "images": [...]}
-                    return response_text
+                    logger.info(f"✅ A2A Message received ({len(response_text)} chars)")
+                    break
 
                 elif isinstance(event, tuple) and len(event) == 2:
                     # (Task, UpdateEvent) tuple - streaming mode
@@ -259,26 +254,107 @@ async def send_a2a_message(
                     # Extract task status
                     task_status = task.status if hasattr(task, 'status') else task
                     state = task_status.state if hasattr(task_status, 'state') else 'unknown'
-                    logger.debug(f"Task state: {state}")
 
-                    # Extract message from TaskStatus
+                    # Accumulate text chunks
                     if hasattr(task_status, 'message') and task_status.message:
-                        message = task_status.message
-                        if hasattr(message, 'parts') and message.parts and len(message.parts) > 0:
-                            text_part = message.parts[0]
-
-                            # Extract text from part
-                            chunk_text = ""
+                        message_obj = task_status.message
+                        if hasattr(message_obj, 'parts') and message_obj.parts:
+                            text_part = message_obj.parts[0]
                             if hasattr(text_part, 'root') and hasattr(text_part.root, 'text'):
-                                chunk_text = text_part.root.text
+                                response_text += text_part.root.text
                             elif hasattr(text_part, 'text'):
-                                chunk_text = text_part.text
-                            else:
-                                chunk_text = str(text_part)
+                                response_text += text_part.text
 
-                            # Accumulate text chunks (silent)
-                            if chunk_text:
-                                response_text += chunk_text
+                    # Check for artifacts IMMEDIATELY (for Live View - browser_session_arn and browser_id)
+                    # This allows frontend to show Live View button while agent is still working
+                    # Keep checking until we have BOTH browser_session_arn AND browser_id
+                    if hasattr(task, 'artifacts') and task.artifacts and (not browser_session_arn or not browser_id_from_stream):
+                        browser_id_extracted = None
+                        logger.info(f"🔴 [Live View] Checking {len(task.artifacts)} artifacts")
+                        for artifact in task.artifacts:
+                            artifact_name = artifact.name if hasattr(artifact, 'name') else 'unnamed'
+                            logger.info(f"🔴 [Live View] Found artifact: {artifact_name}")
+
+                            # Extract browser_session_arn
+                            if artifact_name == 'browser_session_arn':
+                                if hasattr(artifact, 'parts') and artifact.parts:
+                                    for part in artifact.parts:
+                                        if hasattr(part, 'root') and hasattr(part.root, 'text'):
+                                            browser_session_arn = part.root.text
+                                        elif hasattr(part, 'text'):
+                                            browser_session_arn = part.text
+                                        if browser_session_arn:
+                                            logger.info(f"🔴 [Live View] Extracted browser_session_arn IMMEDIATELY: {browser_session_arn}")
+                                            break
+
+                            # Extract browser_id (required for validation)
+                            elif artifact_name == 'browser_id':
+                                if hasattr(artifact, 'parts') and artifact.parts:
+                                    for part in artifact.parts:
+                                        if hasattr(part, 'root') and hasattr(part.root, 'text'):
+                                            browser_id_extracted = part.root.text
+                                        elif hasattr(part, 'text'):
+                                            browser_id_extracted = part.text
+                                        if browser_id_extracted:
+                                            logger.info(f"🔴 [Live View] Extracted browser_id IMMEDIATELY: {browser_id_extracted}")
+                                            browser_id_from_stream = browser_id_extracted  # Store for condition check
+                                            break
+
+                        # If we have browser_session_arn AND browser_id, send event once
+                        if browser_session_arn and (browser_id_from_stream or browser_id_extracted) and not browser_session_event_sent:
+                            # ✅ SEND BROWSER SESSION EVENT ONCE (when we have both session and ID)
+                            event_data = {
+                                "type": "browser_session_detected",
+                                "browserSessionId": browser_session_arn,
+                                "browserId": browser_id_from_stream or browser_id_extracted,
+                                "message": "Browser session started - Live View available"
+                            }
+                            logger.info(f"🔴 [Live View] Sending browser session event with both session and ID")
+                            yield event_data
+                            browser_session_event_sent = True
+
+                    # Check if task failed
+                    if str(state) == 'TaskState.failed' or state == 'failed':
+                        logger.warning(f"❌ Task failed!")
+
+                        # Extract error message from task status
+                        error_message = "Agent task failed"
+                        if hasattr(task_status, 'message') and task_status.message:
+                            if hasattr(task_status.message, 'parts') and task_status.message.parts:
+                                for part in task_status.message.parts:
+                                    if hasattr(part, 'root') and hasattr(part.root, 'text'):
+                                        error_message = part.root.text
+                                    elif hasattr(part, 'text'):
+                                        error_message = part.text
+
+                        # Extract any artifacts (e.g., browser_session_arn, partial results)
+                        if hasattr(task, 'artifacts') and task.artifacts:
+                            for artifact in task.artifacts:
+                                artifact_name = artifact.name if hasattr(artifact, 'name') else 'unnamed'
+                                if hasattr(artifact, 'parts') and artifact.parts:
+                                    for part in artifact.parts:
+                                        artifact_text = ""
+                                        if hasattr(part, 'root') and hasattr(part.root, 'text'):
+                                            artifact_text = part.root.text
+                                        elif hasattr(part, 'text'):
+                                            artifact_text = part.text
+
+                                        if artifact_text:
+                                            if artifact_name == 'browser_session_arn':
+                                                browser_session_arn = artifact_text
+                                            elif artifact_name == 'research_markdown':
+                                                response_text += artifact_text
+
+                        logger.warning(f"❌ Task failed with error: {error_message}")
+
+                        # Yield error with any partial results
+                        yield {
+                            "status": "error",
+                            "content": [{
+                                "text": response_text or f"Error: {error_message}"
+                            }]
+                        }
+                        return
 
                     # Check if task completed
                     if str(state) == 'TaskState.completed' or state == 'completed':
@@ -286,10 +362,8 @@ async def send_a2a_message(
 
                         # Extract all artifacts from completed task
                         if hasattr(task, 'artifacts') and task.artifacts:
-                            logger.info(f"Found {len(task.artifacts)} artifact(s)")
                             for artifact in task.artifacts:
                                 artifact_name = artifact.name if hasattr(artifact, 'name') else 'unnamed'
-                                logger.info(f"Processing artifact: {artifact_name}")
 
                                 if hasattr(artifact, 'parts') and artifact.parts:
                                     for part in artifact.parts:
@@ -300,35 +374,46 @@ async def send_a2a_message(
                                             artifact_text = part.text
 
                                         if artifact_text:
-                                            response_text += artifact_text
-                                            logger.info(f"Added {len(artifact_text)} chars from artifact '{artifact_name}'")
-                        else:
-                            logger.warning("No artifacts found in completed task")
+                                            # Special handling for browser_session_arn
+                                            if artifact_name == 'browser_session_arn':
+                                                browser_session_arn = artifact_text
+                                                logger.info(f"Extracted browser_session_arn: {browser_session_arn}")
+                                            else:
+                                                response_text += artifact_text
 
                         logger.info(f"✅ Total response with artifacts: {len(response_text)} chars")
-                        # Don't return yet, continue to process any remaining events
+                        break
 
-                    # Log update events for progress tracking
+                    # Break on final event
                     if update_event and hasattr(update_event, 'final') and update_event.final:
-                        logger.debug(f"Final update event received")
+                        break
 
-                else:
-                    logger.debug(f"Unexpected event type: {type(event)}, content: {str(event)[:200]}")
-
-        # Return accumulated response or timeout message
-        if response_text:
-            logger.info(f"✅ Final A2A response: {len(response_text)} chars")
-            return response_text
-
-        return "Timeout: No response received"
+        # Yield final result
+        logger.info(f"✅ Final A2A response: {len(response_text)} chars")
+        yield {
+            "status": "success",
+            "content": [{
+                "text": response_text or "Task completed successfully"
+            }]
+        }
 
     except asyncio.TimeoutError:
         logger.warning(f"Timeout calling {agent_id} agent")
-        return f"Agent {agent_id} timed out after {AGENT_TIMEOUT}s"
+        yield {
+            "status": "error",
+            "content": [{
+                "text": f"Agent {agent_id} timed out after {AGENT_TIMEOUT}s"
+            }]
+        }
     except Exception as e:
         logger.error(f"Error calling {agent_id}: {e}")
         logger.exception(e)
-        return f"Error: {str(e)}"
+        yield {
+            "status": "error",
+            "content": [{
+                "text": f"Error: {str(e)}"
+            }]
+        }
 
 
 # ============================================================
@@ -340,7 +425,7 @@ def create_a2a_tool(agent_id: str):
     Create a direct callable tool for the A2A agent
 
     Args:
-        agent_id: Tool ID (e.g., "agentcore_research-agent")
+        agent_id: Tool ID (e.g., "agentcore_research-agent", "agentcore_browser-use-agent")
 
     Returns:
         Strands tool function, or None if not found
@@ -364,49 +449,8 @@ def create_a2a_tool(agent_id: str):
         logger.error(f"Failed to get ARN for {agent_id}")
         return None
 
-    # Create Strands tool function dynamically
-    @tool(context=True)
-    async def research_agent(plan: str, tool_context: ToolContext = None) -> str:
-        """
-        Comprehensive web research agent that searches multiple sources, analyzes information,
-        and generates structured markdown reports with proper citations.
-
-        Before using this tool:
-        - If the user's request is too broad or unclear (e.g., "research AI"), clarify the scope first
-        - Ask about: depth level (quick/detailed/deep-dive), target audience, specific focus areas
-        - Create a clear, specific research plan based on user's clarification
-
-        If the user declines the research:
-        - Acknowledge: "I understand you've declined the research."
-        - Ask: "Would you like me to adjust the scope, or provide a simpler answer?"
-        - Offer alternatives: Modify the plan or use a different approach
-        - NEVER repeat the exact same research plan that was just declined
-
-        Args:
-            plan: Research plan with objectives, topics, and expected report structure.
-
-        Returns:
-            Detailed research report in markdown format with citations
-
-        Example plan:
-            "Research Plan: AI Market Analysis 2024
-
-            Objectives:
-            - Analyze current AI market size and growth trends
-            - Identify key players and their market share
-
-            Topics to investigate:
-            1. Global AI market statistics (2023-2024)
-            2. Leading AI companies and their products
-            3. Investment trends and funding
-
-            Report structure:
-            - Executive Summary
-            - Market Overview
-            - Key Players Analysis
-            - Future Outlook"
-        """
-        # Get session ID, user_id, and model_id from tool context
+    # Helper function to extract context
+    def extract_context(tool_context):
         session_id = None
         user_id = None
         model_id = None
@@ -438,25 +482,149 @@ def create_a2a_tool(agent_id: str):
         if not user_id:
             user_id = os.environ.get('USER_ID')
 
-        # Prepare metadata to send to research agent
-        metadata = {
-            "session_id": session_id,
-            "user_id": user_id,
-            "source": "main_agent",
-            "model_id": model_id,  # Pass the model_id being used by main agent
-            "language": "en",  # Can be dynamic based on user preference
-        }
+        return session_id, user_id, model_id
 
-        logger.info(f"[research_agent] Sending to A2A with metadata: {metadata}")
+    # Generate correct tool name BEFORE creating function
+    correct_name = agent_id.replace("agentcore_", "").replace("-", "_")
 
-        return await send_a2a_message(agent_id, plan, session_id, region, metadata=metadata)
+    # Create different tool implementations based on agent type
+    if "browser" in agent_id:
+        # Browser Use Agent - task parameter only
+        # Uses async generator to stream browser_session_arn immediately for Live View
+        async def tool_impl(task: str, tool_context: ToolContext = None) -> AsyncGenerator[Dict[str, Any], None]:
+            """
+            Autonomous browser automation that executes complex multi-step web tasks using AI-driven navigation.
 
-    # Set function name dynamically
-    research_agent.__name__ = agent_id.replace("agentcore_", "").replace("-", "_")
-    research_agent.__doc__ = agent_description
+            This agent can:
+            - Navigate to any website and interact with elements
+            - Search for information and extract data
+            - Fill out forms and submit data
+            - Handle dynamic content and multi-page workflows
+            - Take actions based on page content
 
-    logger.info(f"✅ A2A tool created: {research_agent.__name__}")
-    return research_agent
+            The agent autonomously decides the steps needed to complete your task.
+
+            Args:
+                task: Clear description of what you want to accomplish in the browser
+
+            Yields:
+                Streaming events including browser session for Live View, then final result
+
+            Examples:
+                "Go to example.com and extract the main heading text"
+                "Search GitHub for the most starred Python repository this month"
+                "Navigate to Amazon and find the price of AWS Bedrock"
+            """
+            session_id, user_id, model_id = extract_context(tool_context)
+
+            # Prepare metadata (max_steps handled internally by agent)
+            metadata = {
+                "session_id": session_id,
+                "user_id": user_id,
+                "source": "main_agent",
+                "model_id": model_id,
+            }
+
+            logger.info(f"[browser_use_agent] Sending to A2A with metadata: {metadata}")
+
+            # ✅ Stream events from A2A agent
+            async for event in send_a2a_message(agent_id, task, session_id, region, metadata=metadata):
+                # Store browser_session_arn in invocation_state for frontend access
+                if isinstance(event, dict):
+                    if event.get("type") == "browser_session_detected":
+                        browser_session_id = event.get("browserSessionId")
+                        if browser_session_id and tool_context:
+                            tool_context.invocation_state['browser_session_arn'] = browser_session_id
+                            logger.info(f"🔴 [Live View] Stored browser_session_arn in invocation_state: {browser_session_id}")
+
+                # Yield event immediately
+                yield event
+
+        # Set correct function name and docstring BEFORE decorating
+        tool_impl.__name__ = correct_name
+        tool_impl.__doc__ = agent_description
+
+        # Apply decorator with context support
+        agent_tool = tool(context=True)(tool_impl)
+
+    else:
+        # Research Agent (default) - plan parameter
+        # Define function WITHOUT decorator first
+        async def tool_impl(plan: str, tool_context: ToolContext = None) -> str:
+            """
+            Comprehensive web research agent that searches multiple sources, analyzes information,
+            and generates structured markdown reports with proper citations.
+
+            Before using this tool:
+            - If the user's request is too broad or unclear (e.g., "research AI"), clarify the scope first
+            - Ask about: depth level (quick/detailed/deep-dive), target audience, specific focus areas
+            - Create a clear, specific research plan based on user's clarification
+
+            If the user declines the research:
+            - Acknowledge: "I understand you've declined the research."
+            - Ask: "Would you like me to adjust the scope, or provide a simpler answer?"
+            - Offer alternatives: Modify the plan or use a different approach
+            - NEVER repeat the exact same research plan that was just declined
+
+            Args:
+                plan: Research plan with objectives, topics, and expected report structure.
+
+            Returns:
+                Detailed research report in markdown format with citations
+
+            Example plan:
+                "Research Plan: AI Market Analysis 2024
+
+                Objectives:
+                - Analyze current AI market size and growth trends
+                - Identify key players and their market share
+
+                Topics to investigate:
+                1. Global AI market statistics (2023-2024)
+                2. Leading AI companies and their products
+                3. Investment trends and funding
+
+                Report structure:
+                - Executive Summary
+                - Market Overview
+                - Key Players Analysis
+                - Future Outlook"
+            """
+            session_id, user_id, model_id = extract_context(tool_context)
+
+            # Prepare metadata
+            metadata = {
+                "session_id": session_id,
+                "user_id": user_id,
+                "source": "main_agent",
+                "model_id": model_id,
+                "language": "en",
+            }
+
+            logger.info(f"[{agent_id}] Sending to A2A with metadata: {metadata}")
+
+            # Consume async generator and get final result
+            final_result = None
+            async for event in send_a2a_message(agent_id, plan, session_id, region, metadata=metadata):
+                final_result = event  # Keep updating to get the last event
+
+            if final_result is None:
+                return "No response from research agent"
+
+            # Research agent should always return string (not dict)
+            if isinstance(final_result, dict):
+                return final_result.get('text', str(final_result))
+            return final_result
+
+        # Set correct function name and docstring BEFORE decorating
+        tool_impl.__name__ = correct_name
+        tool_impl.__doc__ = agent_description
+
+        # Now apply the decorator to get the tool
+        agent_tool = tool(context=True)(tool_impl)
+
+    logger.info(f"✅ A2A tool created: {agent_tool.__name__}")
+    return agent_tool
 
 
 # Cleanup on shutdown

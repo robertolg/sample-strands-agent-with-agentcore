@@ -364,17 +364,22 @@ deploy_agentcore_runtime_a2a() {
 
     if [ -d "agentcore-runtime-a2a-stack/research-agent" ]; then
         AVAILABLE_SERVERS+=("research-agent")
-        echo "  1) research-agent    (Web research and markdown report generation via A2A)"
+        echo "  1) research-agent      (Web research and markdown report generation via A2A)"
+    fi
+
+    if [ -d "agentcore-runtime-a2a-stack/browser-use-agent" ]; then
+        AVAILABLE_SERVERS+=("browser-use-agent")
+        echo "  2) browser-use-agent   (Autonomous browser automation via A2A)"
     fi
 
     if [ -d "archives/agentcore-mcp-farm/document-writer" ]; then
         AVAILABLE_SERVERS+=("document-writer")
-        echo "  2) document-writer   (Markdown document creation)"
+        echo "  3) document-writer     (Markdown document creation)"
     fi
 
     if [ -d "archives/agentcore-mcp-farm/s3-iceberg" ]; then
         AVAILABLE_SERVERS+=("s3-iceberg")
-        echo "  3) s3-iceberg        (S3 data lake queries)"
+        echo "  4) s3-iceberg          (S3 data lake queries)"
     fi
 
     echo ""
@@ -382,7 +387,7 @@ deploy_agentcore_runtime_a2a() {
     echo "  0) Back to main menu"
     echo ""
 
-    read -p "Select server to deploy (0/1/2/3/a): " MCP_OPTION
+    read -p "Select server to deploy (0/1/2/3/4/a): " MCP_OPTION
     echo ""
 
     case $MCP_OPTION in
@@ -395,6 +400,14 @@ deploy_agentcore_runtime_a2a() {
             fi
             ;;
         2)
+            if [[ " ${AVAILABLE_SERVERS[@]} " =~ " browser-use-agent " ]]; then
+                deploy_browser_use_agent
+            else
+                log_error "browser-use-agent not found"
+                exit 1
+            fi
+            ;;
+        3)
             if [[ " ${AVAILABLE_SERVERS[@]} " =~ " document-writer " ]]; then
                 deploy_document_writer
             else
@@ -402,7 +415,7 @@ deploy_agentcore_runtime_a2a() {
                 exit 1
             fi
             ;;
-        3)
+        4)
             if [[ " ${AVAILABLE_SERVERS[@]} " =~ " s3-iceberg " ]]; then
                 deploy_s3_iceberg
             else
@@ -417,6 +430,9 @@ deploy_agentcore_runtime_a2a() {
                 case $server in
                     "research-agent")
                         deploy_research_agent
+                        ;;
+                    "browser-use-agent")
+                        deploy_browser_use_agent
                         ;;
                     "document-writer")
                         deploy_document_writer
@@ -468,6 +484,68 @@ deploy_research_agent() {
     cd ../..
 
     log_info "Research Agent A2A agent deployment complete!"
+}
+
+# Deploy Browser Use Agent
+deploy_browser_use_agent() {
+    log_step "Deploying Browser Use Agent A2A Agent..."
+    echo ""
+
+    cd agentcore-runtime-a2a-stack/browser-use-agent/cdk
+
+    # Install dependencies if needed
+    if [ ! -d "node_modules" ]; then
+        log_step "Installing CDK dependencies..."
+        npm install
+    fi
+
+    # Clean previous build artifacts to force fresh asset generation
+    log_step "Cleaning previous CDK build artifacts..."
+    rm -rf cdk.out
+
+    # Build TypeScript
+    log_step "Building CDK stack..."
+    npm run build
+
+    # Export environment variables for the deployment script
+    export AWS_REGION
+    export PROJECT_NAME="strands-agent-chatbot"
+    export ENVIRONMENT="dev"
+
+    # Check if ECR repository already exists
+    if aws ecr describe-repositories --repository-names strands-agent-chatbot-browser-use-agent --region $AWS_REGION &> /dev/null; then
+        log_info "ECR repository already exists, importing..."
+        export USE_EXISTING_ECR=true
+    else
+        log_info "Creating new ECR repository..."
+        export USE_EXISTING_ECR=false
+    fi
+
+    # Deploy infrastructure
+    log_step "Deploying CDK infrastructure..."
+    npx cdk deploy BrowserUseAgentRuntimeStack --require-approval never
+
+    # Verify deployment
+    log_step "Verifying deployment..."
+
+    RUNTIME_ARN=$(aws ssm get-parameter \
+        --name "/strands-agent-chatbot/dev/a2a/browser-use-agent-runtime-arn" \
+        --query 'Parameter.Value' \
+        --output text \
+        --region $AWS_REGION 2>/dev/null || echo "")
+
+    if [ -n "$RUNTIME_ARN" ]; then
+        log_info "Browser Use Agent deployed successfully!"
+        echo ""
+        echo "Runtime ARN: $RUNTIME_ARN"
+        echo ""
+    else
+        log_warn "Runtime ARN not found in Parameter Store"
+    fi
+
+    cd ../../..
+
+    log_info "Browser Use Agent A2A agent deployment complete!"
 }
 
 # Deploy Document Writer

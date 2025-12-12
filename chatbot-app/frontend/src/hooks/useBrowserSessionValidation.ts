@@ -39,18 +39,26 @@ export function useBrowserSessionValidation(
         return;
       }
 
-      if (!browserSession.sessionId || !browserSession.browserId) {
-        console.warn('[useBrowserSessionValidation] Invalid browser session:', browserSession);
+      if (!browserSession.sessionId) {
+        console.warn('[useBrowserSessionValidation] Invalid browser session - no sessionId:', browserSession);
         return;
       }
+
+      // browserId is optional - AgentCore browser sessions may not have separate browserId
+      // In that case, we use environment variable BROWSER_ID on the server side
 
       // Note: URL expiration check removed - BFF generates fresh URLs on-demand
       try {
         // Validate with backend API that session is still READY
         setIsLoading(true);
-        const response = await fetch(
-          `/api/browser/validate-session?sessionId=${encodeURIComponent(browserSession.sessionId)}&browserId=${encodeURIComponent(browserSession.browserId)}`
-        );
+
+        // Build URL with optional browserId (only include if present)
+        let validateUrl = `/api/browser/validate-session?sessionId=${encodeURIComponent(browserSession.sessionId)}`;
+        if (browserSession.browserId) {
+          validateUrl += `&browserId=${encodeURIComponent(browserSession.browserId)}`;
+        }
+
+        const response = await fetch(validateUrl);
 
         const data = await response.json();
 

@@ -11,6 +11,7 @@ import { ToolSidebar } from "@/components/ToolSidebar"
 import { SuggestedQuestions } from "@/components/SuggestedQuestions"
 import { BrowserLiveViewButton } from "@/components/BrowserLiveViewButton"
 import { ResearchModal } from "@/components/ResearchModal"
+import { BrowserResultModal } from "@/components/BrowserResultModal"
 import { InterruptApprovalModal } from "@/components/InterruptApprovalModal"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -117,6 +118,17 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     query: string
     result: string
     status: 'idle' | 'searching' | 'analyzing' | 'generating' | 'complete' | 'error' | 'declined'
+    agentName: string
+  }>>(new Map())
+  // Browser modal state (separate from research)
+  const [isBrowserModalOpen, setIsBrowserModalOpen] = useState<boolean>(false)
+  const [activeBrowserId, setActiveBrowserId] = useState<string | null>(null)
+  // Track each browser execution independently
+  const [browserData, setBrowserData] = useState<Map<string, {
+    query: string
+    result: string
+    status: 'idle' | 'running' | 'complete' | 'error'
+    agentName: string
   }>>(new Map())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -147,40 +159,80 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     }
   }, [availableTools, toggleTool])
 
-  // Monitor messages for ALL research_agent tool executions to update state
+  // Monitor messages for research_agent and browser_use_agent tool executions separately
   useEffect(() => {
     const newResearchData = new Map(researchData)
+    const newBrowserData = new Map(browserData)
 
-    // Process ALL research executions across all messages
+    // Process ALL research/browser executions across all messages
     for (const group of groupedMessages) {
       if (group.type === 'assistant_turn') {
         for (const message of group.messages) {
           if (message.toolExecutions && message.toolExecutions.length > 0) {
-            // Find ALL research_agent executions
-            const researchExecutions = message.toolExecutions.filter(
-              te => te.toolName === 'research_agent'
-            )
+            // Separate research_agent and browser_use_agent
+            const researchExecutions = message.toolExecutions.filter(te => te.toolName === 'research_agent')
+            const browserExecutions = message.toolExecutions.filter(te => te.toolName === 'browser_use_agent')
 
+            // Process research_agent executions
             for (const researchExecution of researchExecutions) {
               const executionId = researchExecution.id
-              const plan = researchExecution.toolInput?.plan || "Research"
+              const query = researchExecution.toolInput?.plan || "Research Task"
 
               if (!researchExecution.isComplete) {
                 // Still running
                 newResearchData.set(executionId, {
-                  query: plan,
+                  query: query,
                   result: researchExecution.streamingResponse || '',
-                  status: researchExecution.streamingResponse ? 'generating' : 'searching'
+                  status: researchExecution.streamingResponse ? 'generating' : 'searching',
+                  agentName: 'Research Agent'
                 })
               } else if (researchExecution.toolResult) {
                 // Completed with result
                 const resultText = researchExecution.toolResult.toLowerCase()
+                const isError = researchExecution.isCancelled || resultText.includes('error:') || resultText.includes('failed:')
                 const isDeclined = resultText.includes('declined') || resultText.includes('cancelled') || resultText.includes('cancel')
 
+                let status: 'complete' | 'error' | 'declined' = 'complete'
+                if (isError) {
+                  status = 'error'
+                } else if (isDeclined) {
+                  status = 'declined'
+                }
+
                 newResearchData.set(executionId, {
-                  query: plan,
+                  query: query,
                   result: researchExecution.toolResult,
-                  status: isDeclined ? 'declined' : 'complete'
+                  status: status,
+                  agentName: 'Research Agent'
+                })
+              }
+            }
+
+            // Process browser_use_agent executions
+            for (const browserExecution of browserExecutions) {
+              const executionId = browserExecution.id
+              const query = browserExecution.toolInput?.task || "Browser Task"
+
+              if (!browserExecution.isComplete) {
+                // Still running
+                newBrowserData.set(executionId, {
+                  query: query,
+                  result: browserExecution.streamingResponse || '',
+                  status: 'running',
+                  agentName: 'Browser Use Agent'
+                })
+              } else if (browserExecution.toolResult) {
+                // Completed with result
+                const resultText = browserExecution.toolResult.toLowerCase()
+                const isError = browserExecution.isCancelled || resultText.includes('error:') || resultText.includes('failed:') || resultText.includes('browser automation failed')
+
+                const status: 'complete' | 'error' = isError ? 'error' : 'complete'
+
+                newBrowserData.set(executionId, {
+                  query: query,
+                  result: browserExecution.toolResult,
+                  status: status,
+                  agentName: 'Browser Use Agent'
                 })
               }
             }
@@ -189,7 +241,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
       }
     }
 
-    // Update state only if changed
+    // Update research data only if changed
     if (newResearchData.size !== researchData.size ||
         Array.from(newResearchData.entries()).some(([id, data]) => {
           const existing = researchData.get(id)
@@ -197,12 +249,27 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
         })) {
       setResearchData(newResearchData)
     }
+
+    // Update browser data only if changed
+    if (newBrowserData.size !== browserData.size ||
+        Array.from(newBrowserData.entries()).some(([id, data]) => {
+          const existing = browserData.get(id)
+          return !existing || existing.result !== data.result || existing.status !== data.status
+        })) {
+      setBrowserData(newBrowserData)
+    }
   }, [groupedMessages])
 
   // Handle research container click
   const handleResearchClick = useCallback((executionId: string) => {
     setActiveResearchId(executionId)
     setIsResearchModalOpen(true)
+  }, [])
+
+  // Handle browser container click
+  const handleBrowserClick = useCallback((executionId: string) => {
+    setActiveBrowserId(executionId)
+    setIsBrowserModalOpen(true)
   }, [])
 
   // Save wide mode preference to localStorage
@@ -398,8 +465,15 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
       />
 
       {/* Main Chat Area */}
-      <SidebarInset className={`${isEmbedded ? "h-screen" : ""} flex flex-col ${groupedMessages.length === 0 ? 'justify-center items-center' : ''} transition-all duration-700 ease-in-out`}>
-        {/* Top Controls - Only show when chat started */}
+      <SidebarInset className={`${isEmbedded ? "h-screen" : ""} flex flex-col ${groupedMessages.length === 0 ? 'justify-center items-center' : ''} transition-all duration-700 ease-in-out relative`}>
+        {/* Sidebar trigger - Always visible in top-left */}
+        {groupedMessages.length === 0 && (
+          <div className={`absolute top-4 left-4 z-20`}>
+            <SidebarTrigger />
+          </div>
+        )}
+
+        {/* Top Controls - Show when chat started */}
         {groupedMessages.length > 0 && (
           <div className={`sticky top-0 z-10 flex items-center justify-between ${isEmbedded ? 'p-2' : 'p-4'} bg-background/70 backdrop-blur-md border-b border-border/30 shadow-sm`}>
             <div className="flex items-center gap-3">
@@ -457,6 +531,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                   availableTools={availableTools}
                   sessionId={stableSessionId}
                   onResearchClick={handleResearchClick}
+                  onBrowserClick={handleBrowserClick}
                 />
               )}
             </div>
@@ -633,11 +708,9 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
             </div>
 
             {/* Center: Keyboard shortcut hint */}
-            <div className="flex-1 text-center">
-              <kbd className="px-2 py-1 text-sm bg-muted rounded border border-border/50">⌘ B</kbd>
-              {' or '}
-              <kbd className="px-2 py-1 text-sm bg-muted rounded border border-border/50">Ctrl B</kbd>
-              {' '}to open sidebar settings
+            <div className="flex-1 text-center hidden md:block">
+              <kbd className="px-2 py-1 text-sm bg-muted rounded border border-border/50">⌘B</kbd>
+              {' '}for sidebar
             </div>
 
             {/* Right: Theme toggle and Wide mode toggle */}
@@ -703,6 +776,25 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
           result={researchData.get(activeResearchId)!.result}
           status={researchData.get(activeResearchId)!.status}
           sessionId={stableSessionId}
+          agentName={researchData.get(activeResearchId)!.agentName}
+        />
+      )}
+
+      {/* Browser Result Modal */}
+      {activeBrowserId && browserData.get(activeBrowserId) && (
+        <BrowserResultModal
+          isOpen={isBrowserModalOpen}
+          onClose={() => {
+            setIsBrowserModalOpen(false)
+            setActiveBrowserId(null)
+          }}
+          query={browserData.get(activeBrowserId)!.query}
+          isLoading={(() => {
+            const status = browserData.get(activeBrowserId)!.status
+            return status === 'running'
+          })()}
+          result={browserData.get(activeBrowserId)!.result}
+          status={browserData.get(activeBrowserId)!.status}
         />
       )}
 

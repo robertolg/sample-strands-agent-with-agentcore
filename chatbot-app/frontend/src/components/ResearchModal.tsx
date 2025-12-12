@@ -16,6 +16,7 @@ interface ResearchModalProps {
   result: string
   status: 'idle' | 'searching' | 'analyzing' | 'generating' | 'complete' | 'error' | 'declined'
   sessionId?: string
+  agentName?: string
 }
 
 export function ResearchModal({
@@ -25,7 +26,8 @@ export function ResearchModal({
   isLoading,
   result,
   status,
-  sessionId
+  sessionId,
+  agentName = 'Research Agent'
 }: ResearchModalProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [imageUrls, setImageUrls] = useState<Map<string, string>>(new Map())
@@ -43,11 +45,35 @@ export function ResearchModal({
     console.log('[ResearchModal] Result length:', result.length)
     console.log('[ResearchModal] Result preview:', result.substring(0, 500))
 
+    // Helper function to unescape JSON-escaped strings
+    const unescapeJsonString = (str: string): string => {
+      // Check if string looks like it's JSON-escaped (contains literal \n, \u, etc.)
+      if (str.includes('\\n') || str.includes('\\u') || str.includes('\\t')) {
+        try {
+          // Wrap in quotes and parse as JSON to unescape
+          const unescaped = JSON.parse(`"${str.replace(/"/g, '\\"')}"`)
+          console.log('[ResearchModal] ✅ Unescaped JSON-escaped content')
+          return unescaped
+        } catch (e) {
+          // If parsing fails, try a simpler approach
+          console.log('[ResearchModal] JSON.parse failed, using regex unescape')
+          return str
+            .replace(/\\n/g, '\n')
+            .replace(/\\t/g, '\t')
+            .replace(/\\r/g, '\r')
+            .replace(/\\u([0-9a-fA-F]{4})/g, (_, code) => String.fromCharCode(parseInt(code, 16)))
+        }
+      }
+      return str
+    }
+
     // 1. Check for <research> XML tag (primary method)
     const researchMatch = result.match(/<research>([\s\S]*?)<\/research>/)
     if (researchMatch && researchMatch[1]) {
       console.log('[ResearchModal] ✅ Extracted markdown from <research> tag')
-      return researchMatch[1].trim()
+      const content = researchMatch[1].trim()
+      // Unescape if needed (browser-use-agent may return escaped content)
+      return unescapeJsonString(content)
     }
     console.log('[ResearchModal] ❌ No <research> tag found')
 
@@ -57,6 +83,16 @@ export function ResearchModal({
       if (parsed.content && typeof parsed.content === 'string') {
         console.log('[ResearchModal] ✅ Extracted markdown content from JSON')
         return parsed.content
+      }
+      // Check for text field (browser-use-agent format)
+      if (parsed.text && typeof parsed.text === 'string') {
+        console.log('[ResearchModal] ✅ Extracted markdown content from JSON text field')
+        // Check if text contains <research> tags
+        const innerMatch = parsed.text.match(/<research>([\s\S]*?)<\/research>/)
+        if (innerMatch && innerMatch[1]) {
+          return unescapeJsonString(innerMatch[1].trim())
+        }
+        return unescapeJsonString(parsed.text)
       }
     } catch (e) {
       // Not JSON, continue with other methods
@@ -68,13 +104,13 @@ export function ResearchModal({
     if (h1Match && h1Match.index !== undefined) {
       const markdownContent = result.substring(h1Match.index)
       console.log('[ResearchModal] ✅ Extracted markdown content from H1 heading onwards')
-      return markdownContent
+      return unescapeJsonString(markdownContent)
     }
     console.log('[ResearchModal] ❌ No H1 heading found')
 
-    // 4. Last resort: return as is
+    // 4. Last resort: return as is (with unescape attempt)
     console.log('[ResearchModal] ⚠️ Returning result as-is')
-    return result
+    return unescapeJsonString(result)
   }
 
   // Get cleaned markdown content
@@ -218,7 +254,7 @@ export function ResearchModal({
               <FlaskConical className="w-5 h-5 text-blue-500" />
             </div>
             <div>
-              <DialogTitle className="text-lg font-semibold">Research Agent</DialogTitle>
+              <DialogTitle className="text-lg font-semibold">{agentName}</DialogTitle>
               <DialogDescription className="text-sm mt-1">
                 {query}
               </DialogDescription>

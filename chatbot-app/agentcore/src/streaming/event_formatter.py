@@ -104,7 +104,10 @@ class StreamEventFormatter:
         # 2. Handle storage based on tool type
         StreamEventFormatter._handle_tool_storage(tool_result, result_text)
 
-        # 3. Build and return the event
+        # 3. Extract metadata from JSON result text (for A2A browser-use-agent)
+        result_text = StreamEventFormatter._extract_metadata_from_json_result(tool_result, result_text)
+
+        # 4. Build and return the event
         event = StreamEventFormatter._build_tool_result_event(tool_result, result_text, result_images)
 
         return event
@@ -114,15 +117,12 @@ class StreamEventFormatter:
         """Extract text content and images from tool result and process Base64"""
         # Extract basic content from MCP format
         result_text, result_images = StreamEventFormatter._extract_basic_content(tool_result)
-        
+
         # Process JSON content for screenshots and additional images
         json_images, cleaned_text = StreamEventFormatter._process_json_content(result_text)
         result_images.extend(json_images)
-        
-        # Process Base64 downloads for Python MCP tools
-        final_text = StreamEventFormatter._process_base64_downloads(tool_result, cleaned_text)
-        
-        return final_text, result_images
+
+        return cleaned_text, result_images
     
     @staticmethod
     def _extract_basic_content(tool_result: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
@@ -151,38 +151,48 @@ class StreamEventFormatter:
                     if "text" in item:
                         text_content = item["text"]
 
-                        # Check if this text is actually a JSON-stringified MCP response
-                        if text_content.strip().startswith('{"status":') and '"content":[' in text_content:
+                        # Check if this text is actually a JSON-stringified response
+                        if text_content.strip().startswith('{'):
                             try:
-                                parsed_mcp = json.loads(text_content)
+                                parsed_json = json.loads(text_content)
 
-                                # Replace the current tool_result with the parsed MCP response
-                                if "content" in parsed_mcp and isinstance(parsed_mcp["content"], list):
-                                    # Recursively process the unwrapped content
-                                    for unwrapped_item in parsed_mcp["content"]:
-                                        if isinstance(unwrapped_item, dict):
-                                            if "text" in unwrapped_item:
-                                                result_text += unwrapped_item["text"]
-                                            elif "image" in unwrapped_item and "source" in unwrapped_item["image"]:
-                                                image_source = unwrapped_item["image"]["source"]
-                                                image_data = ""
+                                if isinstance(parsed_json, dict):
+                                    # Handle A2A tool response format: {"status": "...", "text": "...", "metadata": {...}}
+                                    if "text" in parsed_json:
+                                        result_text += parsed_json["text"]
+                                        # Extract metadata for browserSessionId
+                                        if "metadata" in parsed_json and isinstance(parsed_json["metadata"], dict):
+                                            if "metadata" not in tool_result:
+                                                tool_result["metadata"] = {}
+                                            tool_result["metadata"].update(parsed_json["metadata"])
+                                        continue
 
-                                                if "data" in image_source:
-                                                    image_data = image_source["data"]
-                                                elif "bytes" in image_source:
-                                                    if isinstance(image_source["bytes"], bytes):
-                                                        image_data = base64.b64encode(image_source["bytes"]).decode('utf-8')
-                                                    else:
-                                                        image_data = str(image_source["bytes"])
+                                    # Handle MCP response format: {"status": "...", "content": [...]}
+                                    if "content" in parsed_json and isinstance(parsed_json["content"], list):
+                                        # Recursively process the unwrapped content
+                                        for unwrapped_item in parsed_json["content"]:
+                                            if isinstance(unwrapped_item, dict):
+                                                if "text" in unwrapped_item:
+                                                    result_text += unwrapped_item["text"]
+                                                elif "image" in unwrapped_item and "source" in unwrapped_item["image"]:
+                                                    image_source = unwrapped_item["image"]["source"]
+                                                    image_data = ""
 
-                                                if image_data:
-                                                    result_images.append({
-                                                        "format": unwrapped_item["image"].get("format", "png"),
-                                                        "data": image_data
-                                                    })
+                                                    if "data" in image_source:
+                                                        image_data = image_source["data"]
+                                                    elif "bytes" in image_source:
+                                                        if isinstance(image_source["bytes"], bytes):
+                                                            image_data = base64.b64encode(image_source["bytes"]).decode('utf-8')
+                                                        else:
+                                                            image_data = str(image_source["bytes"])
 
-                                    # Skip the normal text processing since we handled the unwrapped content
-                                    continue
+                                                    if image_data:
+                                                        result_images.append({
+                                                            "format": unwrapped_item["image"].get("format", "png"),
+                                                            "data": image_data
+                                                        })
+                                        continue
+
                             except json.JSONDecodeError:
                                 # Fall through to normal text processing
                                 pass
@@ -227,34 +237,6 @@ class StreamEventFormatter:
                 
         except (json.JSONDecodeError, TypeError):
             return [], result_text
-    
-    @staticmethod
-    def _process_base64_downloads(tool_result: Dict[str, Any], result_text: str) -> str:
-        """Process Base64 downloads for Python MCP tools"""
-        tool_use_id = tool_result.get("toolUseId")
-        if not tool_use_id:
-            return result_text
-            
-        # Get tool info to check if this is a Python MCP tool
-        tool_info = StreamEventFormatter._get_tool_info(tool_use_id)
-        if not tool_info:
-            return result_text
-            
-        tool_name = tool_info.get('tool_name')
-        session_id = tool_info.get('session_id')
-        
-        # Only process for Python MCP tools
-        if tool_name in ['run_python_code', 'finalize_document'] and session_id:
-            try:
-                processed_text, file_info = StreamEventFormatter._handle_python_mcp_base64(
-                    tool_use_id, result_text, session_id)
-                if file_info:
-                    print(f"📁 Intercepted and saved {len(file_info)} files for {tool_use_id}")
-                    return processed_text
-            except Exception as e:
-                print(f"⚠️ Error processing Base64 downloads: {e}")
-        
-        return result_text
     
     @staticmethod
     def _build_tool_result_event(tool_result: Dict[str, Any], result_text: str, result_images: List[Dict[str, str]]) -> str:
@@ -340,128 +322,13 @@ class StreamEventFormatter:
         })
 
     @staticmethod
-    def _get_tool_info(tool_use_id: str) -> Dict[str, Any]:
-        """Get tool info from the global stream processor's registry"""
-        try:
-            from agent.agent import get_global_stream_processor
-            processor = get_global_stream_processor()
-            if processor and hasattr(processor, 'tool_use_registry'):
-                return processor.tool_use_registry.get(tool_use_id)
-        except ImportError:
-            pass
-        return None
+    def create_metadata_event(metadata: Dict[str, Any]) -> str:
+        """Create metadata update event (e.g., for browser session during tool execution)"""
+        return StreamEventFormatter.format_sse_event({
+            "type": "metadata",
+            "metadata": metadata
+        })
 
-    @staticmethod
-    def _handle_python_mcp_base64(tool_use_id: str, result_text: str, session_id: str) -> Tuple[str, List[Dict[str, Any]]]:
-        """
-        Intercept Base64 file data from Python MCP results and save to local files
-        Returns: (processed_text_without_base64, file_info_list)
-        """
-        import re
-        import base64
-        from config import Config
-        
-        file_info = []
-        processed_text = result_text
-        
-        try:
-            # Pattern to match Base64 data URLs with optional filename attribute
-            # Matches: <download filename="name.ext">data:mime/type;base64,{data}</download>
-            # Use DOTALL flag to match newlines in base64 data, and non-greedy match
-            base64_pattern = r'<download(?:\s+filename="([^"]+)")?>data:([^;]+);base64,([A-Za-z0-9+/=\s]+?)</download>'
-
-            # Check if pattern exists
-            import re
-            matches = re.findall(base64_pattern, result_text)
-
-            def process_base64_match(match):
-                custom_filename = match.group(1)  # May be None if not provided
-                mime_type = match.group(2)
-                base64_data = match.group(3)
-
-                try:
-                    # Decode Base64 data (strip whitespace first)
-                    clean_base64 = base64_data.replace('\n', '').replace('\r', '').replace(' ', '')
-                    file_data = base64.b64decode(clean_base64)
-
-                    # Determine file extension from MIME type
-                    extension_map = {
-                        'application/zip': '.zip',
-                        'text/plain': '.txt',
-                        'application/json': '.json',
-                        'text/csv': '.csv',
-                        'image/png': '.png',
-                        'image/jpeg': '.jpg',
-                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx'
-                    }
-                    extension = extension_map.get(mime_type, '.bin')
-
-                    # Use custom filename if provided, otherwise generate one
-                    if custom_filename:
-                        filename = custom_filename
-                    else:
-                        filename = f"python_output_{len(file_info) + 1}{extension}"
-                    
-                    # Create output directory using provided session_id
-                    if session_id:
-                        try:
-                            import os
-                            session_output_dir = Config.get_session_output_dir(session_id)
-                            tool_dir = os.path.join(session_output_dir, tool_use_id)
-                            os.makedirs(tool_dir, exist_ok=True)
-                        except Exception as dir_error:
-                            print(f"❌ Error creating directory: {dir_error}")
-                            return match.group(0)
-
-                        # Save file
-                        try:
-                            file_path = os.path.join(tool_dir, filename)
-                            with open(file_path, 'wb') as f:
-                                f.write(file_data)
-
-                            # Create download URL (relative to output dir, served from /output/)
-                            relative_path = os.path.relpath(file_path, Config.get_output_dir())
-                            download_url = f"/output/{relative_path}"
-                            
-                            file_info.append({
-                                'filename': filename,
-                                'mime_type': mime_type,
-                                'size': len(file_data),
-                                'download_url': download_url,
-                                'local_path': file_path
-                            })
-                            
-                            print(f"💾 Saved Base64 file: {filename} ({len(file_data)} bytes) -> {file_path}")
-
-                            # Replace Base64 data with file-specific message
-                            file_size_kb = len(file_data) / 1024
-                            if mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-                                return f"✅ Document saved: **{filename}** ({file_size_kb:.1f} KB) - [Download]({download_url})"
-                            elif mime_type == 'application/zip':
-                                return f"📁 Files saved as ZIP archive: **{filename}** ({file_size_kb:.1f} KB) - [Download]({download_url})"
-                            else:
-                                return f"✅ File saved: **{filename}** ({file_size_kb:.1f} KB) - [Download]({download_url})"
-                        except Exception as save_error:
-                            print(f"❌ Error saving file: {save_error}")
-                            return match.group(0)
-                    else:
-                        print(f"⚠️ No session ID found for tool_use_id: {tool_use_id}")
-                        return match.group(0)  # Keep original if no session
-                        
-                except Exception as e:
-                    print(f"❌ Error processing Base64 data: {e}")
-                    return match.group(0)  # Keep original on error
-            
-            # Process all Base64 matches
-            processed_text = re.sub(base64_pattern, process_base64_match, result_text)
-            
-            if file_info:
-                print(f"💾 Processed Python MCP result: found {len(file_info)} files")
-            
-        except Exception as e:
-            print(f"❌ Error in _handle_python_mcp_base64: {e}")
-        
-        return processed_text, file_info
 
     @staticmethod
     def _extract_images_from_json_response(response_data):
@@ -522,9 +389,55 @@ class StreamEventFormatter:
             
             # Return the cleaned JSON string
             return json.dumps(cleaned_result, indent=2)
-            
+
         except Exception as e:
             # If cleaning fails, return the original
             print(f"Warning: Failed to clean result text: {e}")
             return original_text
+
+    @staticmethod
+    def _extract_metadata_from_json_result(tool_result: Dict[str, Any], result_text: str) -> str:
+        """
+        Extract metadata (like browserSessionId) from JSON result text.
+        A2A browser-use-agent returns JSON with metadata containing browserSessionId.
+        This method parses the result and extracts metadata into tool_result.
+        Returns the cleaned result text (without metadata wrapper if extracted).
+        """
+        import json
+
+        try:
+            # Try to parse result_text as JSON
+            parsed = json.loads(result_text)
+
+            if isinstance(parsed, dict):
+                # Check for metadata field with browserSessionId
+                if "metadata" in parsed and isinstance(parsed["metadata"], dict):
+                    browser_session_id = parsed["metadata"].get("browserSessionId")
+                    if browser_session_id:
+                        # Add to tool_result metadata
+                        if "metadata" not in tool_result:
+                            tool_result["metadata"] = {}
+                        tool_result["metadata"]["browserSessionId"] = browser_session_id
+                        print(f"[Live View] Extracted browserSessionId from tool result: {browser_session_id}")
+
+                        # Return the actual text content, not the wrapper JSON
+                        if "text" in parsed:
+                            return parsed["text"]
+
+                # Check for browser_session_arn field directly
+                browser_session_arn = parsed.get("browser_session_arn")
+                if browser_session_arn:
+                    if "metadata" not in tool_result:
+                        tool_result["metadata"] = {}
+                    tool_result["metadata"]["browserSessionId"] = browser_session_arn
+                    print(f"[Live View] Extracted browser_session_arn from tool result: {browser_session_arn}")
+
+                    if "text" in parsed:
+                        return parsed["text"]
+
+        except (json.JSONDecodeError, TypeError):
+            # Not JSON, return original
+            pass
+
+        return result_text
 

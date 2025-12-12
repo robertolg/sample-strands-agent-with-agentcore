@@ -167,8 +167,10 @@ export async function GET(request: NextRequest) {
 
     // Browser automation tools (grouped within builtin tools)
     const browserAutomation = (toolsConfig.browser_automation || []).map((group: any) => {
-      // Check if any tool in the group is enabled
-      const anyToolEnabled = group.tools.some((tool: any) => enabledToolIds.includes(tool.id))
+      // Check if any tool in the group is enabled (only if group has tools)
+      const anyToolEnabled = group.tools && Array.isArray(group.tools)
+        ? group.tools.some((tool: any) => enabledToolIds.includes(tool.id))
+        : enabledToolIds.includes(group.id)
 
       return {
         id: group.id,
@@ -179,21 +181,25 @@ export async function GET(request: NextRequest) {
         type: 'builtin_tools',
         tool_type: 'builtin',
         enabled: anyToolEnabled,
-        isDynamic: true,
-        tools: group.tools.map((tool: any) => ({
-          id: tool.id,
-          name: tool.name,
-          description: tool.description,
-          enabled: enabledToolIds.includes(tool.id)
-        }))
+        isDynamic: group.isDynamic ?? true,
+        tools: group.tools && Array.isArray(group.tools)
+          ? group.tools.map((tool: any) => ({
+              id: tool.id,
+              name: tool.name,
+              description: tool.description,
+              enabled: enabledToolIds.includes(tool.id)
+            }))
+          : undefined
       }
     })
 
     // Gateway tools (grouped like Browser Automation)
     const gatewayTargets = toolsConfig.gateway_targets || []
     const gatewayTools = gatewayTargets.map((target: any) => {
-      // Check if any tool in the group is enabled
-      const anyToolEnabled = target.tools.some((tool: any) => enabledToolIds.includes(tool.id))
+      // Check if any tool in the group is enabled (only if target has tools)
+      const anyToolEnabled = target.tools && Array.isArray(target.tools)
+        ? target.tools.some((tool: any) => enabledToolIds.includes(tool.id))
+        : enabledToolIds.includes(target.id)
 
       return {
         id: target.id,
@@ -204,13 +210,15 @@ export async function GET(request: NextRequest) {
         type: 'gateway',
         tool_type: 'gateway',
         enabled: anyToolEnabled,
-        isDynamic: true,
-        tools: target.tools.map((tool: any) => ({
-          id: tool.id,
-          name: tool.name,
-          description: tool.description,
-          enabled: enabledToolIds.includes(tool.id)
-        }))
+        isDynamic: target.isDynamic ?? true,
+        tools: target.tools && Array.isArray(target.tools)
+          ? target.tools.map((tool: any) => ({
+              id: tool.id,
+              name: tool.name,
+              description: tool.description,
+              enabled: enabledToolIds.includes(tool.id)
+            }))
+          : undefined
       }
     })
 
@@ -274,8 +282,8 @@ export async function GET(request: NextRequest) {
       type: 'builtin_tools',
       tool_type: 'builtin',
       enabled: group.enabled ?? true,
-      isDynamic: true,
-      tools: group.tools
+      isDynamic: group.isDynamic ?? true,
+      tools: group.tools || undefined
     }))
 
     // Gateway tools (fallback - grouped)
@@ -289,8 +297,8 @@ export async function GET(request: NextRequest) {
       type: 'gateway',
       tool_type: 'gateway',
       enabled: target.enabled ?? false,
-      isDynamic: true,
-      tools: target.tools
+      isDynamic: target.isDynamic ?? true,
+      tools: target.tools || undefined
     }))
 
     // Runtime A2A agents (fallback - grouped)

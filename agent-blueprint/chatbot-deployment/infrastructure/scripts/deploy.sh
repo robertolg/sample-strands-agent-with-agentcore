@@ -22,11 +22,8 @@ else
     echo "No .env file found at $ENV_FILE, using environment defaults"
 fi
 
-# Check if Docker is running
-if ! docker info > /dev/null 2>&1; then
-    echo "Error: Docker is not running. Please start Docker and try again."
-    exit 1
-fi
+# Note: Docker is NOT required for deployment
+# Container images are built automatically by AWS CodeBuild during CDK deployment
 
 # Check if AWS CLI is configured
 if ! aws sts get-caller-identity > /dev/null 2>&1; then

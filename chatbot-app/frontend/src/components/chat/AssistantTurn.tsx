@@ -21,9 +21,10 @@ interface AssistantTurnProps {
   }>
   sessionId?: string
   onResearchClick?: (executionId: string) => void
+  onBrowserClick?: (executionId: string) => void
 }
 
-export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, currentReasoning, availableTools = [], sessionId, onResearchClick }) => {
+export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, currentReasoning, availableTools = [], sessionId, onResearchClick, onBrowserClick }) => {
   // Get initial feedback state from first message
   const initialFeedback = messages[0]?.feedback || null
 
@@ -204,16 +205,18 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
               const message = item.content as Message
               const toolExecutions = message.toolExecutions || []
 
-              // Separate research_agent from other tool executions
+              // Separate research_agent, browser_use_agent, and other tool executions
               const researchExecution = toolExecutions.find(te => te.toolName === 'research_agent')
-              const otherExecutions = toolExecutions.filter(te => te.toolName !== 'research_agent')
+              const browserExecution = toolExecutions.find(te => te.toolName === 'browser_use_agent')
+              const otherExecutions = toolExecutions.filter(te => te.toolName !== 'research_agent' && te.toolName !== 'browser_use_agent')
 
               return (
                 <div key={item.key} className="animate-fade-in space-y-4">
-                  {/* Research Container */}
+                  {/* Research Agent Container */}
                   {researchExecution && (
                     <ResearchContainer
-                      query={researchExecution.toolInput?.plan || 'Research plan'}
+                      query={researchExecution.toolInput?.plan || 'Research Task'}
+                      agentName='Research Agent'
                       status={
                         researchExecution.isComplete
                           ? (() => {
@@ -245,6 +248,61 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
                         if (resultText.includes('declined') || resultText.includes('cancelled') || resultText.includes('cancel')) return
 
                         onResearchClick(researchExecution.id)
+                      }}
+                    />
+                  )}
+
+                  {/* Browser Use Agent Container */}
+                  {browserExecution && (
+                    <ResearchContainer
+                      query={browserExecution.toolInput?.task || 'Browser Task'}
+                      agentName='Browser Use Agent'
+                      status={
+                        browserExecution.isComplete
+                          ? (() => {
+                              // Check for errors
+                              const resultText = (browserExecution.toolResult || '').toLowerCase()
+                              if (browserExecution.isCancelled || resultText.includes('error:') || resultText.includes('failed:') || resultText.includes('browser automation failed')) {
+                                return 'error'
+                              }
+                              return 'complete'
+                            })()
+                          : browserExecution.streamingResponse
+                          ? 'generating'
+                          : 'searching'
+                      }
+                      isLoading={!browserExecution.isComplete}
+                      hasResult={(() => {
+                        // Cancelled executions have no result
+                        if (browserExecution.isCancelled) return false
+
+                        // Completed: check toolResult for errors
+                        if (browserExecution.isComplete && browserExecution.toolResult) {
+                          const resultText = browserExecution.toolResult.toLowerCase()
+                          return !(resultText.includes('browser automation failed'))
+                        }
+
+                        // Running: enable real-time viewing
+                        if (!browserExecution.isComplete) {
+                          return true
+                        }
+
+                        return false
+                      })()}
+                      onClick={() => {
+                        if (!onBrowserClick) return
+
+                        // Allow opening during execution (no toolResult check)
+                        // Only block if cancelled or failed
+                        if (browserExecution.isCancelled) return
+
+                        // If completed, check for failure
+                        if (browserExecution.isComplete && browserExecution.toolResult) {
+                          const resultText = browserExecution.toolResult.toLowerCase()
+                          if (resultText.includes('browser automation failed')) return
+                        }
+
+                        onBrowserClick(browserExecution.id)
                       }}
                     />
                   )}
@@ -399,7 +457,7 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
     })
 
   const reasoningEqual = prevProps.currentReasoning?.text === nextProps.currentReasoning?.text
-  const callbackEqual = prevProps.onResearchClick === nextProps.onResearchClick
+  const callbackEqual = prevProps.onResearchClick === nextProps.onResearchClick && prevProps.onBrowserClick === nextProps.onBrowserClick
 
   return messagesEqual && reasoningEqual && prevProps.sessionId === nextProps.sessionId && callbackEqual
 })

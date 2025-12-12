@@ -4,6 +4,12 @@ import React from 'react';
 import { Tool } from '@/types/chat';
 import { Switch } from '@/components/ui/switch';
 import { SidebarMenuItem } from '@/components/ui/sidebar';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 
 interface ToolItemProps {
   tool: Tool;
@@ -22,14 +28,23 @@ export function ToolItem({ tool, onToggleTool }: ToolItemProps) {
 
     return (
       <SidebarMenuItem key={tool.id}>
-        <div className="flex items-center justify-between p-2 rounded-md hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors duration-150">
+        <div className="flex items-center justify-between p-3 md:p-2 rounded-md hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors duration-150">
           <div className="flex-1 min-w-0">
             <div className="font-medium text-sm text-sidebar-foreground truncate">
               {tool.name}
             </div>
-            <div className="text-xs text-sidebar-foreground/70 truncate">
-              {tool.description}
-            </div>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="text-xs text-sidebar-foreground/70 truncate cursor-help">
+                    {tool.description}
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <p>{tool.description}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <div className="text-xs mt-1">
               <span className="text-blue-600">● {nestedTools.length} tools</span>
             </div>
@@ -49,7 +64,7 @@ export function ToolItem({ tool, onToggleTool }: ToolItemProps) {
                 }
               }
             }}
-            className="ml-2 flex-shrink-0"
+            className="ml-3 md:ml-2 flex-shrink-0"
           />
         </div>
       </SidebarMenuItem>
@@ -58,19 +73,28 @@ export function ToolItem({ tool, onToggleTool }: ToolItemProps) {
     // Render as individual tool
     return (
       <SidebarMenuItem key={tool.id}>
-        <div className="flex items-center justify-between p-2 rounded-md hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors duration-150">
+        <div className="flex items-center justify-between p-3 md:p-2 rounded-md hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors duration-150">
           <div className="flex-1 min-w-0">
             <div className="font-medium text-sm text-sidebar-foreground truncate">
               {tool.name}
             </div>
-            <div className="text-xs text-sidebar-foreground/70 truncate">
-              {tool.description}
-            </div>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="text-xs text-sidebar-foreground/70 truncate cursor-help">
+                    {tool.description}
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <p>{tool.description}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
           <Switch
             checked={tool.enabled}
             onCheckedChange={() => onToggleTool(tool.id)}
-            className="ml-2 flex-shrink-0"
+            className="ml-3 md:ml-2 flex-shrink-0"
           />
         </div>
       </SidebarMenuItem>

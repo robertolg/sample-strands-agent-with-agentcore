@@ -8,6 +8,7 @@ Handles:
 4. SSE streaming
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -21,7 +22,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
-import os
 
 # Set up logging
 logging.basicConfig(

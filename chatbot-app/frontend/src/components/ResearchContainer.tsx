@@ -10,6 +10,7 @@ interface ResearchContainerProps {
   isLoading: boolean
   hasResult?: boolean
   onClick: () => void
+  agentName?: string  // Display name for the agent (e.g., "Research Agent" or "Browser Use Agent")
 }
 
 export function ResearchContainer({
@@ -17,7 +18,8 @@ export function ResearchContainer({
   status,
   isLoading,
   hasResult = true,
-  onClick
+  onClick,
+  agentName = 'Research Agent'
 }: ResearchContainerProps) {
   const getStatusText = () => {
     switch (status) {
@@ -41,6 +43,8 @@ export function ResearchContainer({
   const isComplete = status === 'complete' && hasResult
   const isDeclined = status === 'declined'
   const isError = status === 'error'
+  // Show button during loading if we have partial results (for real-time viewing)
+  const showOpenButton = isComplete || (isLoading && hasResult)
 
   return (
     <div
@@ -92,9 +96,9 @@ export function ResearchContainer({
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between mb-2">
               <h4 className="font-semibold text-base text-foreground">
-                Research Agent
+                {agentName}
               </h4>
-              {isComplete && (
+              {showOpenButton && (
                 <Button
                   variant="default"
                   size="sm"
