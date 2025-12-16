@@ -14,6 +14,30 @@ const USER_SESSIONS_FILE = path.join(STORE_DIR, 'user-sessions.json')
 // Session store structure: { [userId]: SessionMetadata[] }
 type SessionStore = Record<string, SessionMetadata[]>
 
+/**
+ * Validate sessionId to prevent path traversal attacks
+ * Only allows alphanumeric characters, underscores, and hyphens
+ */
+function validateSessionId(sessionId: string): boolean {
+  // Must be non-empty and contain only safe characters
+  if (!sessionId || typeof sessionId !== 'string') {
+    return false
+  }
+  // Only allow alphanumeric, underscore, and hyphen (no dots, slashes, etc.)
+  return /^[a-zA-Z0-9_-]+$/.test(sessionId)
+}
+
+/**
+ * Validate userId to prevent path traversal attacks
+ */
+function validateUserId(userId: string): boolean {
+  if (!userId || typeof userId !== 'string') {
+    return false
+  }
+  // Allow alphanumeric, underscore, hyphen, and @ for email-based userIds
+  return /^[a-zA-Z0-9_@.-]+$/.test(userId)
+}
+
 // Ensure store directory exists
 function ensureStoreDir() {
   if (!fs.existsSync(STORE_DIR)) {
@@ -76,6 +100,12 @@ export function getUserSessions(
  * Get specific session
  */
 export function getSession(userId: string, sessionId: string): SessionMetadata | null {
+  // Validate inputs to prevent path traversal
+  if (!validateUserId(userId) || !validateSessionId(sessionId)) {
+    console.error(`[LocalSessionStore] Invalid userId or sessionId format`)
+    return null
+  }
+
   const store = loadSessionStore()
   const sessions = store[userId] || []
   return sessions.find((s) => s.sessionId === sessionId) || null
@@ -97,6 +127,12 @@ export function upsertSession(
     metadata?: SessionMetadata['metadata']
   }
 ): SessionMetadata {
+  // Validate inputs to prevent path traversal
+  if (!validateUserId(userId) || !validateSessionId(sessionId)) {
+    console.error(`[LocalSessionStore] Invalid userId or sessionId format`)
+    throw new Error('Invalid userId or sessionId format')
+  }
+
   const store = loadSessionStore()
   const sessions = store[userId] || []
 
@@ -154,6 +190,12 @@ export function updateSession(
     metadata?: Partial<SessionMetadata['metadata']>
   }
 ): void {
+  // Validate inputs to prevent path traversal
+  if (!validateUserId(userId) || !validateSessionId(sessionId)) {
+    console.error(`[LocalSessionStore] Invalid userId or sessionId format`)
+    throw new Error('Invalid userId or sessionId format')
+  }
+
   const existingSession = getSession(userId, sessionId)
 
   if (!existingSession) {
@@ -232,6 +274,12 @@ export function clearUserSessions(userId: string): void {
  */
 export function getSessionMessages(sessionId: string): any[] {
   try {
+    // Validate sessionId to prevent path traversal
+    if (!validateSessionId(sessionId)) {
+      console.error(`[LocalSessionStore] Invalid sessionId format: ${sessionId}`)
+      throw new Error('Invalid session ID format')
+    }
+
     // Path to AgentCore Runtime storage
     const agentcoreSessionsDir = path.join(process.cwd(), '..', 'agentcore', 'sessions')
     const sessionDir = path.join(agentcoreSessionsDir, `session_${sessionId}`)

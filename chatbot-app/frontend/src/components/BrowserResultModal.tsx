@@ -43,7 +43,9 @@ export function BrowserResultModal({
     const unescapeJsonString = (str: string): string => {
       if (str.includes('\\n') || str.includes('\\u') || str.includes('\\t')) {
         try {
-          const unescaped = JSON.parse(`"${str.replace(/"/g, '\\"')}"`)
+          // Properly escape both backslashes and quotes to prevent injection
+          const escaped = str.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+          const unescaped = JSON.parse(`"${escaped}"`)
           console.log('[BrowserResultModal] ✅ Unescaped JSON-escaped content')
           return unescaped
         } catch (e) {

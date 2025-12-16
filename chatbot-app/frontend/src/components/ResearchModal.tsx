@@ -51,7 +51,9 @@ export function ResearchModal({
       if (str.includes('\\n') || str.includes('\\u') || str.includes('\\t')) {
         try {
           // Wrap in quotes and parse as JSON to unescape
-          const unescaped = JSON.parse(`"${str.replace(/"/g, '\\"')}"`)
+          // Properly escape both backslashes and quotes to prevent injection
+          const escaped = str.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+          const unescaped = JSON.parse(`"${escaped}"`)
           console.log('[ResearchModal] ✅ Unescaped JSON-escaped content')
           return unescaped
         } catch (e) {
