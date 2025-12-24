@@ -135,8 +135,9 @@ export function BrowserLiveViewModal({
           throw new Error('DCV SDK not loaded');
         }
 
-        // Reduce DCV logging noise - only show errors
-        dcv.setLogLevel(dcv.LogLevel.ERROR);
+        // Reduce DCV logging noise - suppress all logs except critical errors
+        // WARN level filters out networkMonitor errors while keeping critical issues
+        dcv.setLogLevel(dcv.LogLevel.WARN);
 
         console.log('[DCV] Connecting to browser session...');
 

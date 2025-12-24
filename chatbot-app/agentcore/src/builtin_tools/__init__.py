@@ -23,7 +23,7 @@ You can verify the sync with: GET http://localhost:3000/api/tools
 """
 
 from .diagram_tool import generate_diagram_and_validate
-from .nova_act_browser_tools import browser_navigate, browser_act, browser_extract, browser_get_page_info, browser_manage_tabs
+from .nova_act_browser_tools import browser_navigate, browser_act, browser_extract, browser_get_page_info, browser_manage_tabs, browser_save_screenshot
 from .word_document_tool import (
     create_word_document,
     modify_word_document,
@@ -56,6 +56,7 @@ __all__ = [
     'browser_extract',
     'browser_get_page_info',
     'browser_manage_tabs',
+    'browser_save_screenshot',
     'create_word_document',
     'modify_word_document',
     'list_my_word_documents',
@@ -85,6 +86,7 @@ BUILTIN_TOOLS = [
     browser_extract,
     browser_get_page_info,
     browser_manage_tabs,
+    browser_save_screenshot,
     create_word_document,
     modify_word_document,
     list_my_word_documents,

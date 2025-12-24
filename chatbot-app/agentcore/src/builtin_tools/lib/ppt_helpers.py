@@ -273,12 +273,12 @@ def select_layout(prs: Presentation, content_type: str, template_info: dict = No
         'content': 1,     # Title and Content (alias for bullet)
         'section': 2,     # Section Header
         'table': 1,       # Title and Content (works for tables)
-        'chart': 5,       # Title Only (or blank for full-size charts)
-        'image': 6,       # Blank
+        'chart': 5,       # Title Only
+        'image': 5,       # Title Only
         'blank': 6        # Blank
     }
 
-    idx = default_map.get(content_type, 1)
+    idx = default_map.get(content_type, 5)  # Default to Title Only for unknown types
 
     # Safety check: ensure index is within bounds
     max_idx = len(prs.slide_layouts) - 1
@@ -536,27 +536,30 @@ def add_chart_to_slide(slide, chart_data: dict) -> None:
 
 
 def add_image_to_slide(slide, image_path: str) -> None:
-    """Add image to slide
+    """Add image to slide with automatic size adjustment to fit slide bounds
 
     Args:
         slide: Slide object
-        image_path: Path to image file (string or dict with 'path' key)
+        image_path: Path to image file (string or dict with 'path' and optional 'width')
 
     Example:
         add_image_to_slide(slide, "logo.png")
         # or
-        add_image_to_slide(slide, {"path": "logo.png", "width": 5})
+        add_image_to_slide(slide, {"path": "logo.png", "width": 5})  # Fixed width
     """
     try:
         import os
+        from PIL import Image
 
         # Handle both string and dict format
+        manual_width = None
         if isinstance(image_path, dict):
             path = image_path.get("path", "")
-            width = Inches(image_path.get("width", 8))
+            # If width is specified, use it (no auto-adjustment)
+            if "width" in image_path:
+                manual_width = Inches(image_path.get("width"))
         else:
             path = str(image_path)
-            width = Inches(8)
 
         # Check if file exists
         if not os.path.exists(path):
@@ -565,12 +568,59 @@ def add_image_to_slide(slide, image_path: str) -> None:
             print(f"Warning: Image not found: {path}. Available: {available}")
             return
 
-        # Insert image with safe positioning
-        left = Inches(0.8)
-        top = Inches(1.5)  # Start below title area
-        slide.shapes.add_picture(path, left, top, width=width)
+        # If manual width specified, use it without adjustment
+        if manual_width:
+            left = Inches(0.8)
+            top = Inches(1.5)
+            slide.shapes.add_picture(path, left, top, width=manual_width)
+            print(f"Added image: {path} (manual width: {manual_width})")
+            return
 
-        print(f"Added image: {path}")
+        # Auto-adjust: Calculate optimal size to fit slide
+        # Standard slide: 10" × 7.5"
+        # Available area (with margins and title): ~9" × 5.5"
+        max_width = Inches(9)
+        max_height = Inches(5.5)
+        margin_left = Inches(0.5)
+        margin_top = Inches(1.5)  # Below title
+
+        # Get image dimensions
+        img = Image.open(path)
+        img_width, img_height = img.size
+        img_ratio = img_width / img_height
+
+        # Calculate size that fits within bounds while preserving aspect ratio
+        # Try fitting by width first
+        target_width = max_width
+        target_height = target_width / img_ratio
+
+        # If height exceeds limit, fit by height instead
+        if target_height > max_height:
+            target_height = max_height
+            target_width = target_height * img_ratio
+
+        # Center the image in available space
+        left = margin_left + (max_width - target_width) / 2
+        top = margin_top + (max_height - target_height) / 2
+
+        slide.shapes.add_picture(path, left, top, width=target_width)
+
+        print(f"Added image: {path} ({img_width}×{img_height}px → {target_width.inches:.2f}\"×{target_height.inches:.2f}\")")
+
+    except ImportError:
+        # PIL not available, fallback to fixed size
+        print("Warning: PIL not available for image size detection. Using fixed size.")
+        import os
+        if isinstance(image_path, dict):
+            path = image_path.get("path", "")
+        else:
+            path = str(image_path)
+
+        if os.path.exists(path):
+            left = Inches(0.8)
+            top = Inches(1.5)
+            slide.shapes.add_picture(path, left, top, width=Inches(8))
+            print(f"Added image: {path} (fixed size)")
 
     except Exception as e:
         print(f"Warning: Failed to add image: {e}")

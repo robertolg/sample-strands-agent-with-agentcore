@@ -32,15 +32,17 @@ export function useBrowserSessionValidation(
 
   useEffect(() => {
     async function validateSession() {
-      // Reset state
-      setIsValid(false);
+      // Don't reset state immediately - keep previous validation status until new result
+      // This prevents button from flickering on/off during re-validation
 
       if (!chatSessionId || !browserSession) {
+        setIsValid(false);
         return;
       }
 
       if (!browserSession.sessionId) {
         console.warn('[useBrowserSessionValidation] Invalid browser session - no sessionId:', browserSession);
+        setIsValid(false);
         return;
       }
 

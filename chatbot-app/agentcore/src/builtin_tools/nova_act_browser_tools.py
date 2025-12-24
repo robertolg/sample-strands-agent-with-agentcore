@@ -3,6 +3,7 @@ Browser automation tools using AgentCore Browser + Nova Act.
 Each tool returns a screenshot to show current browser state.
 """
 
+import os
 import logging
 from typing import Dict, Any, Optional, List
 from strands import tool, ToolContext
@@ -64,7 +65,7 @@ def browser_navigate(url: str, tool_context: ToolContext) -> Dict[str, Any]:
     Navigate browser to a URL and capture the loaded page with screenshot.
 
     Args:
-        url: Complete URL (use direct URLs with search parameters when possible)
+        url: Complete URL to navigate to
 
     Returns screenshot showing the loaded page.
     """
@@ -146,19 +147,21 @@ Current page is shown in the screenshot below."""
 @tool(context=True)
 def browser_act(instruction: str, tool_context: ToolContext) -> Dict[str, Any]:
     """
-    Execute browser UI actions: click, type, scroll, select dropdowns.
+    Execute browser UI actions using an agent. Handles sequential visible UI tasks.
+
+    Capabilities:
+    - Actions: click, type, scroll, select dropdowns
+    - Can execute 2-3 related steps in sequence when visible on screen
 
     Limitations:
-    - CANNOT extract DOM data (image URLs, link hrefs) or use right-click/F12
-    - Has 4-step limit. If fails 2-3 times, try different tool or ask user
-    - For DOM attributes, use browser_get_page_info() or add custom tool
+    - Has 3-step limit. If fails, simplify instruction or try different tool
+    - For DOM attributes, use browser_get_page_info()
 
     Args:
-        instruction: Can combine 2-3 sequential actions for efficiency, or use single actions
-                    when you need to observe results between steps.
+        instruction: Natural language instruction for UI actions.
 
-                    Combined: "Type 'laptop' in search box and click search button"
-                    Single: "Click the login button" (when exploring unknown page)
+                    Sequential steps: "Type 'laptop' in search box and click search button"
+                    Single step: "Click the login button" (when exploring unknown page)
 
     Returns screenshot showing the result.
     """
@@ -233,13 +236,16 @@ Current page state is shown in the screenshot below."""
 @tool(context=True)
 def browser_extract(description: str, extraction_schema: dict, tool_context: ToolContext) -> Dict[str, Any]:
     """
-    Extract visible text/numbers from page into structured JSON.
-    Can auto-scroll and paginate to collect data across multiple screens.
+    Extract visible text/numbers from page into structured JSON using an agent.
+    Handles multi-screen data collection automatically.
+
+    Capabilities:
+    - Auto-scroll and paginate to collect data across multiple screens
+    - Detects repeated patterns and extracts systematically
 
     Limitations:
-    - CANNOT extract DOM attributes (image src, link href, HTML)
-    - Has 6-step limit. If too complex, break down or simplify schema
-    - For DOM attributes, use browser_get_page_info() or add custom tool
+    - Has 6-step limit. If too complex, break down task or simplify schema
+    - For DOM attributes, use browser_get_page_info()
 
     Args:
         description: What to extract. Example: "Extract all product names and prices"
@@ -696,6 +702,102 @@ Current tab screenshot shown below."""
         return {
             "content": [{
                 "text": f"❌ **Tab management error**: {str(e)}"
+            }],
+            "status": "error"
+        }
+
+
+@tool(context=True)
+def browser_save_screenshot(filename: str, tool_context: ToolContext) -> Dict[str, Any]:
+    """
+    Save current browser screenshot to workspace.
+    Saved images can be referenced by filename in document tools.
+
+    Args:
+        filename: Image filename (e.g., "search-results.png", "product-page.jpg")
+                 Must end with .png, .jpg, or .jpeg
+
+    Returns text confirmation of saved location.
+    """
+    try:
+        # Validate filename
+        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            return {
+                "content": [{
+                    "text": "❌ **Invalid filename**: Must end with .png, .jpg, or .jpeg"
+                }],
+                "status": "error"
+            }
+
+        # Get session_id from ToolContext
+        session_id = tool_context.invocation_state.get("session_id")
+        if not session_id and hasattr(tool_context.agent, '_session_manager'):
+            session_id = tool_context.agent._session_manager.session_id
+            logger.info(f"[browser_save_screenshot] Using session_id from agent._session_manager: {session_id}")
+        elif session_id:
+            logger.info(f"[browser_save_screenshot] Using session_id from invocation_state: {session_id}")
+        else:
+            raise ValueError("session_id not found in ToolContext")
+
+        # Get user_id (from environment or agent config)
+        user_id = os.environ.get('USER_ID', 'default_user')
+
+        # Get current browser controller
+        controller = get_or_create_controller(session_id)
+
+        # Ensure browser is connected
+        if not controller._connected:
+            controller.connect()
+
+        # Get current page info for context
+        page_info = controller.get_page_info()
+        if page_info.get("status") != "success":
+            return {
+                "content": [{
+                    "text": "❌ **Failed to capture screenshot**: Browser not ready"
+                }],
+                "status": "error"
+            }
+
+        # Take screenshot using controller's method
+        screenshot_bytes = controller._take_screenshot()
+
+        if not screenshot_bytes:
+            return {
+                "content": [{
+                    "text": "❌ **No screenshot data available**"
+                }],
+                "status": "error"
+            }
+
+        # Save to workspace using ImageManager
+        from workspace import ImageManager
+
+        image_manager = ImageManager(user_id=user_id, session_id=session_id)
+        image_manager.save_to_s3(filename, screenshot_bytes)
+
+        # Get current page info for context
+        current_url = page_info.get("page", {}).get("url", "Unknown")
+        current_title = page_info.get("page", {}).get("title", "Untitled")
+
+        return {
+            "content": [{
+                "text": f"""✅ **Screenshot saved to workspace**
+
+**Filename**: {filename}
+**Source**: {current_title}
+**URL**: {current_url}
+
+This image is now available in workspace and can be referenced by filename in document tools."""
+            }],
+            "status": "success"
+        }
+
+    except Exception as e:
+        logger.error(f"browser_save_screenshot failed: {e}")
+        return {
+            "content": [{
+                "text": f"❌ **Screenshot save error**: {str(e)}"
             }],
             "status": "error"
         }

@@ -189,12 +189,12 @@
     {
       "id": "browser_automation",
       "name": "Nova Act Browser Control",
-      "description": "Web browser automation powered by Nova Act AI (5 tools)",
+      "description": "Web browser automation powered by Nova Act AI (6 tools)",
       "category": "browser_automation_agents",
       "icon": "🌐",
       "enabled": true,
       "isDynamic": true,
-      "systemPromptGuidance": "Browser Automation Best Practices:\n- ALWAYS prefer direct URLs with search parameters over multi-step navigation\n- Example: Use \"https://www.google.com/search?q=AI+news\" instead of navigating → typing → submitting\n- Only use browser_act when direct URL navigation is not possible",
+      "systemPromptGuidance": "Browser Automation Best Practices:\n\n**Plan First:** Before starting browser work, outline the complete workflow. Consider which tools handle each step.\n\n**Agent Tools:** act and extract are agents handling sequential tasks (2-6 steps). Good for visible UI workflows: navigation sequences, form filling, multi-screen data collection.\n\n**Screenshot Capture:** Use browser_save_screenshot at important milestones to capture visual evidence. Screenshots are saved to workspace with the specified filename and become automatically available to other tools.\n\n**Tool Synergy:** Browser extracts UI-visible data (listings, prices, titles). When search tools are available, use them for detailed content (reviews, articles, specifications).\n\n**On Failure:** If browser task fails, simplify the instruction, reduce extraction schema complexity, or pivot to alternative tools (get_page_info for structure, search APIs for content).",
       "tags": ["shopping", "automation", "scraping", "research"],
       "tools": [
         {
@@ -221,6 +221,11 @@
           "id": "browser_manage_tabs",
           "name": "Manage Tabs",
           "description": "Switch, close, or create browser tabs (use get_page_info to view tabs)"
+        },
+        {
+          "id": "browser_save_screenshot",
+          "name": "Save Screenshot",
+          "description": "Save current page screenshot to workspace for document use"
         }
       ]
     },

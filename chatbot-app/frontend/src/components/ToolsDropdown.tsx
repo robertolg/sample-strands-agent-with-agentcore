@@ -228,38 +228,31 @@ export function ToolsDropdown({ availableTools, onToggleTool, disabled = false }
                       </button>
                     </div>
                   </div>
-                  <div className="space-y-2">
+                  <div className="flex flex-wrap gap-2 px-1">
                     {enabledTools.map((tool) => {
                       const ToolIcon = getToolIcon(tool.id);
                       const isDynamic = (tool as any).isDynamic === true;
                       const nestedTools = (tool as any).tools || [];
 
                       return (
-                        <TooltipProvider key={tool.id} delayDuration={300}>
+                        <TooltipProvider key={tool.id} delayDuration={200}>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <div
+                              <button
                                 onClick={() => handleToolToggle(tool.id, tool)}
-                                className="group w-full flex items-center gap-3 px-3.5 py-3 rounded-lg transition-all cursor-pointer bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-950/60 border border-emerald-200 hover:border-emerald-300 dark:border-emerald-800/60 dark:hover:border-emerald-700 shadow-sm hover:shadow-md"
+                                className="group flex items-center justify-center w-10 h-10 rounded-lg transition-all cursor-pointer bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-950/60 border border-emerald-200 hover:border-emerald-300 dark:border-emerald-800/60 dark:hover:border-emerald-700 shadow-sm hover:shadow-md"
                               >
-                                <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 group-hover:bg-emerald-200 dark:group-hover:bg-emerald-900/70 transition-colors">
-                                  <ToolIcon className="w-4.5 h-4.5 text-emerald-700 dark:text-emerald-300 shrink-0 transition-transform group-hover:scale-110" />
-                                </div>
-                                <div className="flex-1 text-left min-w-0">
-                                  <div className="text-sm font-semibold text-emerald-900 dark:text-emerald-100 truncate">{tool.name}</div>
-                                  {isDynamic && nestedTools.length > 0 && (
-                                    <div className="text-xs text-emerald-700/70 dark:text-emerald-300/70 font-medium">
-                                      {nestedTools.length} tools
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
+                                <ToolIcon className="w-5 h-5 text-emerald-700 dark:text-emerald-300 shrink-0 transition-transform group-hover:scale-110" />
+                              </button>
                             </TooltipTrigger>
-                            <TooltipContent side="right" className="max-w-xs">
-                              <p className="text-sm">{tool.description}</p>
-                              {isDynamic && nestedTools.length > 0 && (
-                                <p className="text-xs opacity-70 mt-1">{nestedTools.length} tools included</p>
-                              )}
+                            <TooltipContent side="top" className="max-w-xs z-50">
+                              <div className="space-y-1">
+                                <p className="font-semibold">{tool.name}</p>
+                                <p className="text-sm text-muted-foreground">{tool.description}</p>
+                                {isDynamic && nestedTools.length > 0 && (
+                                  <p className="text-xs opacity-70 mt-1">{nestedTools.length} tools included</p>
+                                )}
+                              </div>
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
@@ -278,38 +271,31 @@ export function ToolsDropdown({ availableTools, onToggleTool, disabled = false }
                     </div>
                     Active Tools ({filteredEnabledTools.length})
                   </div>
-                  <div className="space-y-2">
+                  <div className="flex flex-wrap gap-2 px-1">
                     {filteredEnabledTools.map((tool) => {
                       const ToolIcon = getToolIcon(tool.id);
                       const isDynamic = (tool as any).isDynamic === true;
                       const nestedTools = (tool as any).tools || [];
 
                       return (
-                        <TooltipProvider key={tool.id} delayDuration={300}>
+                        <TooltipProvider key={tool.id} delayDuration={200}>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <div
+                              <button
                                 onClick={() => handleToolToggle(tool.id, tool)}
-                                className="group w-full flex items-center gap-3 px-3.5 py-3 rounded-lg transition-all cursor-pointer bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-950/60 border border-emerald-200 hover:border-emerald-300 dark:border-emerald-800/60 dark:hover:border-emerald-700 shadow-sm hover:shadow-md"
+                                className="group flex items-center justify-center w-10 h-10 rounded-lg transition-all cursor-pointer bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-950/60 border border-emerald-200 hover:border-emerald-300 dark:border-emerald-800/60 dark:hover:border-emerald-700 shadow-sm hover:shadow-md"
                               >
-                                <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 group-hover:bg-emerald-200 dark:group-hover:bg-emerald-900/70 transition-colors">
-                                  <ToolIcon className="w-4.5 h-4.5 text-emerald-700 dark:text-emerald-300 shrink-0 transition-transform group-hover:scale-110" />
-                                </div>
-                                <div className="flex-1 text-left min-w-0">
-                                  <div className="text-sm font-semibold text-emerald-900 dark:text-emerald-100 truncate">{tool.name}</div>
-                                  {isDynamic && nestedTools.length > 0 && (
-                                    <div className="text-xs text-emerald-700/70 dark:text-emerald-300/70 font-medium">
-                                      {nestedTools.length} tools
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
+                                <ToolIcon className="w-5 h-5 text-emerald-700 dark:text-emerald-300 shrink-0 transition-transform group-hover:scale-110" />
+                              </button>
                             </TooltipTrigger>
-                            <TooltipContent side="right" className="max-w-xs">
-                              <p className="text-sm">{tool.description}</p>
-                              {isDynamic && nestedTools.length > 0 && (
-                                <p className="text-xs opacity-70 mt-1">{nestedTools.length} tools included</p>
-                              )}
+                            <TooltipContent side="top" className="max-w-xs z-50">
+                              <div className="space-y-1">
+                                <p className="font-semibold">{tool.name}</p>
+                                <p className="text-sm text-muted-foreground">{tool.description}</p>
+                                {isDynamic && nestedTools.length > 0 && (
+                                  <p className="text-xs opacity-70 mt-1">{nestedTools.length} tools included</p>
+                                )}
+                              </div>
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>

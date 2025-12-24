@@ -35,7 +35,10 @@ from a2a.types import (
 
 from browser_use import Agent as BrowserUseAgent, Browser, BrowserProfile
 from browser_use.llm import ChatAWSBedrock
+from browser_use.tools.service import Tools
 from bedrock_agentcore.tools.browser_client import BrowserClient
+from pydantic import BaseModel
+from typing import Any
 
 # Configure logging
 logging.basicConfig(
@@ -43,6 +46,82 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# ============================================================
+# Custom Action: Save Screenshot
+# ============================================================
+
+class SaveScreenshotParams(BaseModel):
+    """Parameters for save_screenshot action"""
+    filename: str
+    description: str
+
+# Global reference to current browser session and updater (set during agent execution)
+_current_browser_context = None
+_current_updater = None
+
+def create_screenshot_tools():
+    """Create Tools instance with custom screenshot action"""
+    tools = Tools()
+
+    @tools.action(
+        'Save screenshot to workspace with descriptive filename. Use at important milestones (search results, completed forms, final state).',
+        param_model=SaveScreenshotParams
+    )
+    def save_screenshot(params: SaveScreenshotParams):
+        """
+        Save current browser screenshot to main agent's workspace.
+
+        Args:
+            filename: Descriptive name ending with .png (e.g., "amazon-search-results.png")
+            description: What the screenshot shows (e.g., "Product search results page")
+
+        Returns:
+            Confirmation message
+        """
+        global _current_browser_context, _current_updater
+
+        if not _current_browser_context or not _current_updater:
+            return "❌ Error: Browser session not available"
+
+        try:
+            # Validate filename
+            if not params.filename.lower().endswith('.png'):
+                params.filename = params.filename + '.png'
+
+            # Take screenshot synchronously (will be run in async context by browser-use)
+            import asyncio
+            import base64
+            from datetime import datetime
+
+            # Get event loop and run screenshot coroutine
+            loop = asyncio.get_event_loop()
+
+            # Take screenshot using Page.screenshot()
+            page = _current_browser_context
+            screenshot_b64 = loop.run_until_complete(page.screenshot(format='png'))
+
+            # Send as artifact to main agent
+            loop.run_until_complete(_current_updater.add_artifact(
+                parts=[Part(root=TextPart(text=screenshot_b64))],
+                name="screenshot",
+                metadata={
+                    "filename": params.filename,
+                    "content_type": "image/png",
+                    "encoding": "base64",
+                    "description": params.description
+                }
+            ))
+
+            logger.info(f"✅ Screenshot saved: {params.filename} - {params.description}")
+            return f"✅ Screenshot saved: {params.filename}"
+
+        except Exception as e:
+            error_msg = f"❌ Failed to save screenshot: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
+    return tools
 
 # Configuration from environment
 PORT = int(os.environ.get('PORT', 9000))
@@ -58,14 +137,77 @@ logger.info(f"  Port: {PORT}")
 logger.info(f"  Project: {PROJECT_NAME}")
 logger.info(f"  Environment: {ENVIRONMENT}")
 
+# ============================================================
+# Patched ChatAWSBedrock with Fixed Tool Schema Conversion
+# ============================================================
+
+class PatchedChatAWSBedrock(ChatAWSBedrock):
+    """
+    ChatAWSBedrock with fixed _format_tools_for_request method.
+
+    The original implementation loses nested schema information (array items,
+    object properties, $ref definitions), causing validation errors.
+
+    This patched version recursively resolves $ref references and preserves
+    complete nested schema structure for proper tool calling.
+    """
+
+    def _format_tools_for_request(self, output_format: type[BaseModel]) -> list[dict[str, Any]]:
+        """Format a Pydantic model as a tool for structured output."""
+        schema = output_format.model_json_schema()
+
+        # Resolve $ref references inline by merging $defs
+        def resolve_refs(obj: Any, defs: dict) -> Any:
+            """Recursively resolve $ref references in schema."""
+            if isinstance(obj, dict):
+                if '$ref' in obj:
+                    # Extract definition name from $ref (e.g., "#/$defs/ActionModel" -> "ActionModel")
+                    ref_path = obj['$ref'].split('/')[-1]
+                    if ref_path in defs:
+                        # Recursively resolve the referenced definition
+                        return resolve_refs(defs[ref_path], defs)
+                    return obj
+                else:
+                    # Recursively resolve all nested objects
+                    return {k: resolve_refs(v, defs) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [resolve_refs(item, defs) for item in obj]
+            else:
+                return obj
+
+        # Get $defs if they exist
+        defs = schema.get('$defs', {})
+
+        # Resolve all $ref references in properties
+        properties = resolve_refs(schema.get('properties', {}), defs)
+        required = schema.get('required', [])
+
+        # Build complete input schema with all nested structures preserved
+        input_schema = {
+            'type': 'object',
+            'properties': properties,
+            'required': required
+        }
+
+        return [
+            {
+                'toolSpec': {
+                    'name': f'extract_{output_format.__name__.lower()}',
+                    'description': f'Extract information in the format of {output_format.__name__}',
+                    'inputSchema': {'json': input_schema},
+                }
+            }
+        ]
+
+
 # LLM cache for reusing clients with the same model_id
-llm_cache: Dict[str, ChatAWSBedrock] = {}
+llm_cache: Dict[str, PatchedChatAWSBedrock] = {}
 
 # Note: Browser sessions are NOT cached - each task gets a fresh browser session
 # This prevents stale session errors and ensures clean browser state per task
 
 
-def get_or_create_llm(model_id: str) -> ChatAWSBedrock:
+def get_or_create_llm(model_id: str) -> PatchedChatAWSBedrock:
     """
     Get cached LLM client or create new one with specified model_id.
 
@@ -73,7 +215,7 @@ def get_or_create_llm(model_id: str) -> ChatAWSBedrock:
         model_id: AWS Bedrock model ID (e.g., 'us.anthropic.claude-sonnet-4-20250514-v1:0')
 
     Returns:
-        ChatAWSBedrock instance
+        PatchedChatAWSBedrock instance with fixed tool schema conversion
     """
     if model_id not in llm_cache:
         logger.info(f"Creating new LLM client with model: {model_id}")
@@ -81,7 +223,7 @@ def get_or_create_llm(model_id: str) -> ChatAWSBedrock:
         import boto3
         boto_session = boto3.Session(region_name=AWS_REGION)
 
-        llm_cache[model_id] = ChatAWSBedrock(
+        llm_cache[model_id] = PatchedChatAWSBedrock(
             model=model_id,
             aws_region=AWS_REGION,
             temperature=0.7,
@@ -318,37 +460,35 @@ def _format_execution_history(history) -> str:
     final_result = None
     last_step = history_list[-1]
 
-    if hasattr(last_step, 'result') and last_step.result:
-        result_obj = last_step.result
+    # Extract result from last step (result is a list of ActionResult)
+    if hasattr(last_step, 'result') and last_step.result and len(last_step.result) > 0:
+        # Get the last action result (usually the done action)
+        result_obj = last_step.result[-1]
 
-        # Check if task completed successfully
-        is_done = getattr(result_obj, 'is_done', False)
-        success = getattr(result_obj, 'success', False)
+        # Priority 1: Extract content from done action's text parameter
+        if hasattr(result_obj, 'extracted_content') and result_obj.extracted_content:
+            final_result = result_obj.extracted_content
 
-        if is_done and success:
-            # Extract judgement/reasoning if available
-            if hasattr(result_obj, 'judgement') and result_obj.judgement:
-                judgement = result_obj.judgement
-                if hasattr(judgement, 'reasoning'):
-                    final_result = judgement.reasoning
+        # Priority 2: Extract from long_term_memory
+        elif hasattr(result_obj, 'long_term_memory') and result_obj.long_term_memory:
+            final_result = result_obj.long_term_memory
 
-            # Fallback to extracted_content if available
-            if not final_result and hasattr(result_obj, 'extracted_content'):
-                final_result = result_obj.extracted_content
+        # Priority 3: Extract from judgement (if Judge was used)
+        elif hasattr(result_obj, 'judgement') and result_obj.judgement:
+            judgement = result_obj.judgement
+            if hasattr(judgement, 'reasoning') and judgement.reasoning:
+                final_result = judgement.reasoning
 
-            # Fallback to str representation
-            if not final_result:
-                result_str = str(result_obj)
-                # Clean up the representation
-                if len(result_str) > 1000:
-                    final_result = result_str[:1000] + "..."
-                else:
-                    final_result = result_str
-        else:
-            final_result = f"Task completed with status: done={is_done}, success={success}"
-
+    # Fallback: check if task was marked as done
     if not final_result:
-        final_result = "Task completed successfully."
+        if hasattr(last_step, 'result') and last_step.result and len(last_step.result) > 0:
+            is_done = getattr(last_step.result[-1], 'is_done', False)
+            if is_done:
+                final_result = "Task marked as complete by agent."
+            else:
+                final_result = "Task execution finished."
+        else:
+            final_result = "Task execution finished."
 
     output_lines.append(final_result)
     output_lines.append("\n")
@@ -465,19 +605,20 @@ class BrowserUseAgentExecutor(AgentExecutor):
                 cross_origin_iframes=False,  # Disable cross-origin iframes (blocks most ads)
                 max_iframes=5,  # Aggressive limit: only process first 5 same-origin iframes
                 max_iframe_depth=3,  # Reduce nested iframe depth (default: 5)
-                keep_alive=True,  # Keep browser alive after agent.run() completes (for Live View)
             )
 
             # Create browser session with CDP URL
             browser_session = Browser(
                 cdp_url=ws_url,
                 browser_profile=browser_profile,
-                keep_alive=True  # Keep session alive for duration
             )
 
             # Initialize browser session
             logger.info("Initializing AgentCore Browser session...")
             await browser_session.start()
+
+            # Create screenshot tools for custom actions
+            screenshot_tools = create_screenshot_tools()
 
             # Create browser-use agent (SINGLE LLM LAYER!)
             logger.info(f"Starting browser-use agent with model {model_id}")
@@ -485,10 +626,39 @@ class BrowserUseAgentExecutor(AgentExecutor):
                 task=task_text,
                 llm=llm,
                 browser_session=browser_session,  # Use browser_session parameter
+                tools=screenshot_tools,  # Add custom screenshot action
                 max_actions_per_step=1,  # Observe after each action to prevent WebSocket timeout
                 llm_screenshot_size=(1536, 1296),  # Match viewport to avoid scaling overhead
+                use_vision='auto',  # Enable vision mode to allow screenshot action
                 use_judge=False,  # Disable Judge - rely on agent's own completion signal
+                extend_system_message="""
+<screenshot_capture>
+**IMPORTANT**: Use save_screenshot action to capture important pages and states:
+- Search results pages
+- Completed forms before submission
+- Final result pages
+- Any page with critical information
+
+Call save_screenshot with:
+- filename: Descriptive name ending with .png (e.g., "search-results.png")
+- description: What the screenshot shows (e.g., "Product search results")
+
+Screenshots are automatically saved to workspace.
+</screenshot_capture>""",
             )
+
+            # Set global variables for custom action access
+            global _current_browser_context, _current_updater
+            _current_updater = updater
+            # Get current page from browser session for screenshot access
+            _current_browser_context = await browser_session.get_current_page()
+
+            # Override agent's close() method to prevent browser session cleanup
+            # This keeps the browser alive for Live View after task completion
+            async def noop_close():
+                logger.info("🔴 [Live View] Skipping agent close() to keep browser session alive for Live View")
+                pass
+            agent.close = noop_close
 
             # Execute autonomously with REAL-TIME step streaming
             # Run agent in background while monitoring history
@@ -537,9 +707,8 @@ class BrowserUseAgentExecutor(AgentExecutor):
                         sent_step_numbers.add(i)
                         logger.info(f"✅ Streamed final browser_step_{i} to frontend")
 
-            # Note: Do NOT explicitly stop browser session - let it timeout naturally
-            # This allows user to view the browser state via Live View after task completion
-            logger.info("Browser session kept alive for post-execution viewing (will timeout automatically)")
+            # Browser session kept alive for Live View (will timeout after 25 minutes)
+            logger.info("🔴 [Live View] Browser session kept alive for post-execution viewing")
 
             # Format result
             result_text = _format_execution_history(history)
@@ -561,9 +730,6 @@ class BrowserUseAgentExecutor(AgentExecutor):
                 name="browser_result"
             )
             logger.info(f"Added browser_result artifact ({len(result_text)} chars)")
-
-            # Note: browser_session_arn artifact was already sent at the beginning of execution
-            # This allows frontend to show Live View button while agent is still working
 
             # Complete task
             await updater.complete()

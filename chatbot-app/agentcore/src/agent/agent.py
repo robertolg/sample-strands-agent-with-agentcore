@@ -140,9 +140,8 @@ class ResearchApprovalHook(HookProvider):
             action = "research"
 
         elif tool_name == "browser_use_agent":
-            # Browser-Use Agent: show task and max_steps
+            # Browser-Use Agent: show task only
             task = tool_input.get("task", "No task provided")
-            max_steps = tool_input.get("max_steps", 15)
             logger.info(f"🌐 Requesting approval for browser_use_agent with task: {task[:100]}...")
 
             approval = event.interrupt(
@@ -151,7 +150,6 @@ class ResearchApprovalHook(HookProvider):
                     "tool_name": tool_name,
                     "task": task,
                     "task_preview": task[:200] + "..." if len(task) > 200 else task,
-                    "max_steps": max_steps
                 }
             )
             action = "browser automation"

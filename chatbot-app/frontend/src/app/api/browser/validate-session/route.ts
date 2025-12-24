@@ -65,8 +65,18 @@ export async function GET(request: NextRequest) {
 
     const sessionResponse = await client.send(sessionCommand);
 
-    // Session is valid if status is READY
+    // BrowserSessionStatus can be: READY or TERMINATED
+    // READY: session is active and can be viewed
+    // TERMINATED: session has been terminated
     const isValid = sessionResponse.status === 'READY';
+
+    console.log('[validate-session] Session validation result:', {
+      sessionId,
+      browserId,
+      status: sessionResponse.status,
+      isValid,
+      lastUpdatedAt: sessionResponse.lastUpdatedAt
+    });
 
     return NextResponse.json({
       isValid,

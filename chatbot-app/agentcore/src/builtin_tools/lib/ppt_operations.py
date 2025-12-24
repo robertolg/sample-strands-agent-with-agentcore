@@ -190,7 +190,7 @@ def generate_add_slide_code(
         layout_name: Name of layout to use
         position: Position to insert (-1 for append)
         custom_code: Optional Python code to execute on the new slide
-                     Available variables: new_slide, prs, Inches, Pt, RGBColor
+                     Available variables: slide, prs, Inches, Pt, RGBColor
 
     Returns:
         Python code string
@@ -201,7 +201,7 @@ def generate_add_slide_code(
         indented_custom = '\n'.join('    ' + line if line.strip() else ''
                                      for line in custom_code.split('\n'))
         custom_section = f"""
-    # Execute custom code (slide alias for intuitive usage)
+    # Execute custom code
     slide = new_slide
 {indented_custom}
 """

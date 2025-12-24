@@ -1099,7 +1099,7 @@ def add_slide(
         position: Position to insert (0-based, -1 to append)
         output_name: Output presentation name WITHOUT extension (must differ from source)
         custom_code: Optional Python code to customize the slide. Available variables:
-            - new_slide: The newly created slide object
+            - slide: The newly created slide object
             - prs: Presentation object
             - Inches, Pt: pptx.util functions for measurements
             - RGBColor: pptx.dml.color.RGBColor for colors
@@ -1113,10 +1113,10 @@ def add_slide(
         add_slide("deck", "Title and Content", position=2, output_name="deck-v2",
                   custom_code='''
                   # Set title
-                  new_slide.shapes.title.text = "Q4 Results"
+                  slide.shapes.title.text = "Q4 Results"
 
                   # Add bullet points
-                  content = new_slide.placeholders[1]
+                  content = slide.placeholders[1]
                   tf = content.text_frame
                   tf.text = "Revenue: $1M"
                   p = tf.add_paragraph()
@@ -1129,17 +1129,17 @@ def add_slide(
         add_slide("deck", "Blank", position=5, output_name="deck-v2",
                   custom_code='''
                   # Add image
-                  new_slide.shapes.add_picture('chart.png', Inches(1), Inches(2), width=Inches(8))
+                  slide.shapes.add_picture('chart.png', Inches(1), Inches(2), width=Inches(8))
 
                   # Add caption
-                  textbox = new_slide.shapes.add_textbox(Inches(1), Inches(6), Inches(8), Inches(0.5))
+                  textbox = slide.shapes.add_textbox(Inches(1), Inches(6), Inches(8), Inches(0.5))
                   textbox.text = "Revenue growth over 4 quarters"
                   ''')
 
     Example (chart):
         add_slide("deck", "Title Only", position=3, output_name="deck-v2",
                   custom_code='''
-                  new_slide.shapes.title.text = "Revenue Growth"
+                  slide.shapes.title.text = "Revenue Growth"
 
                   # Create chart data
                   chart_data = CategoryChartData()
@@ -1147,7 +1147,7 @@ def add_slide(
                   chart_data.add_series('Revenue', (100, 120, 140, 160))
 
                   # Add chart
-                  chart = new_slide.shapes.add_chart(
+                  chart = slide.shapes.add_chart(
                       XL_CHART_TYPE.COLUMN_CLUSTERED,
                       Inches(2), Inches(2), Inches(6), Inches(4.5),
                       chart_data
@@ -1168,10 +1168,10 @@ def add_slide(
                   plt.close()
 
                   # Add to slide
-                  new_slide.shapes.add_picture('revenue_chart.png', Inches(0.5), Inches(1), width=Inches(9))
+                  slide.shapes.add_picture('revenue_chart.png', Inches(0.5), Inches(1), width=Inches(9))
 
                   # Add title
-                  title_box = new_slide.shapes.add_textbox(Inches(1), Inches(0.3), Inches(8), Inches(0.6))
+                  title_box = slide.shapes.add_textbox(Inches(1), Inches(0.3), Inches(8), Inches(0.6))
                   title_box.text = "2024 Revenue Performance"
                   title_box.text_frame.paragraphs[0].font.size = Pt(32)
                   title_box.text_frame.paragraphs[0].font.bold = True

@@ -264,12 +264,12 @@ class BrowserController:
                 "screenshot": None
             }
 
-    def act(self, instruction: str, max_steps: int = 4, timeout: int = 120) -> Dict[str, Any]:
+    def act(self, instruction: str, max_steps: int = 3, timeout: int = 120) -> Dict[str, Any]:
         """Execute natural language instruction using Nova Act
 
         Args:
             instruction: Natural language instruction for the browser
-            max_steps: Maximum number of steps (default: 4 allows combined actions)
+            max_steps: Maximum number of steps (default: 3 for focused actions)
             timeout: Timeout in seconds for the entire act call
         """
         try:

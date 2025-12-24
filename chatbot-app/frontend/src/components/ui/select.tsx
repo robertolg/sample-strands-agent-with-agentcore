@@ -37,10 +37,27 @@ const SelectContext = React.createContext<{
 
 const Select = ({ value, onValueChange, children }: SelectProps) => {
   const [open, setOpen] = React.useState(false)
+  const selectRef = React.useRef<HTMLDivElement>(null)
+
+  // Close dropdown when clicking outside
+  React.useEffect(() => {
+    if (!open) return
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (selectRef.current && !selectRef.current.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [open])
 
   return (
     <SelectContext.Provider value={{ value, onValueChange, open, setOpen }}>
-      <div className="relative">
+      <div ref={selectRef} className="relative">
         {children}
       </div>
     </SelectContext.Provider>

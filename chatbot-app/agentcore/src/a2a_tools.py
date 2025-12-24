@@ -306,51 +306,100 @@ async def send_a2a_message(
                     # Check for artifacts IMMEDIATELY (for Live View - browser_session_arn and browser_id)
                     # This allows frontend to show Live View button while agent is still working
                     if hasattr(task, 'artifacts') and task.artifacts:
-                        # Extract browser_session_arn and browser_id (if not yet extracted)
-                        if not browser_session_arn or not browser_id_from_stream:
-                            browser_id_extracted = None
-                            logger.info(f"🔴 [Live View] Checking {len(task.artifacts)} artifacts")
-                            for artifact in task.artifacts:
-                                artifact_name = artifact.name if hasattr(artifact, 'name') else 'unnamed'
-                                logger.info(f"🔴 [Live View] Found artifact: {artifact_name}")
+                        # Always check artifacts for new browser_session_arn or browser_id
+                        # (they may arrive in separate streaming events)
+                        logger.info(f"🔴 [Live View] Checking {len(task.artifacts)} artifacts")
+                        for artifact in task.artifacts:
+                            artifact_name = artifact.name if hasattr(artifact, 'name') else 'unnamed'
+                            logger.info(f"🔴 [Live View] Found artifact: {artifact_name}")
 
-                                # Extract browser_session_arn
-                                if artifact_name == 'browser_session_arn':
-                                    if hasattr(artifact, 'parts') and artifact.parts:
-                                        for part in artifact.parts:
-                                            if hasattr(part, 'root') and hasattr(part.root, 'text'):
-                                                browser_session_arn = part.root.text
-                                            elif hasattr(part, 'text'):
-                                                browser_session_arn = part.text
-                                            if browser_session_arn:
-                                                logger.info(f"🔴 [Live View] Extracted browser_session_arn IMMEDIATELY: {browser_session_arn}")
-                                                break
+                            # Extract browser_session_arn (if not yet extracted)
+                            if artifact_name == 'browser_session_arn' and not browser_session_arn:
+                                if hasattr(artifact, 'parts') and artifact.parts:
+                                    for part in artifact.parts:
+                                        if hasattr(part, 'root') and hasattr(part.root, 'text'):
+                                            browser_session_arn = part.root.text
+                                        elif hasattr(part, 'text'):
+                                            browser_session_arn = part.text
+                                        if browser_session_arn:
+                                            logger.info(f"🔴 [Live View] Extracted browser_session_arn IMMEDIATELY: {browser_session_arn}")
+                                            break
 
-                                # Extract browser_id (required for validation)
-                                elif artifact_name == 'browser_id':
-                                    if hasattr(artifact, 'parts') and artifact.parts:
-                                        for part in artifact.parts:
-                                            if hasattr(part, 'root') and hasattr(part.root, 'text'):
-                                                browser_id_extracted = part.root.text
-                                            elif hasattr(part, 'text'):
-                                                browser_id_extracted = part.text
-                                            if browser_id_extracted:
-                                                logger.info(f"🔴 [Live View] Extracted browser_id IMMEDIATELY: {browser_id_extracted}")
-                                                browser_id_from_stream = browser_id_extracted  # Store for condition check
-                                                break
+                            # Extract browser_id (required for validation) - if not yet extracted
+                            elif artifact_name == 'browser_id' and not browser_id_from_stream:
+                                if hasattr(artifact, 'parts') and artifact.parts:
+                                    for part in artifact.parts:
+                                        if hasattr(part, 'root') and hasattr(part.root, 'text'):
+                                            browser_id_from_stream = part.root.text
+                                        elif hasattr(part, 'text'):
+                                            browser_id_from_stream = part.text
+                                        if browser_id_from_stream:
+                                            logger.info(f"🔴 [Live View] Extracted browser_id IMMEDIATELY: {browser_id_from_stream}")
+                                            break
 
-                            # If we have browser_session_arn AND browser_id, send event once
-                            if browser_session_arn and (browser_id_from_stream or browser_id_extracted) and not browser_session_event_sent:
-                                # ✅ SEND BROWSER SESSION EVENT ONCE (when we have both session and ID)
-                                event_data = {
-                                    "type": "browser_session_detected",
-                                    "browserSessionId": browser_session_arn,
-                                    "browserId": browser_id_from_stream or browser_id_extracted,
-                                    "message": "Browser session started - Live View available"
-                                }
-                                logger.info(f"🔴 [Live View] Sending browser session event with both session and ID")
-                                yield event_data
-                                browser_session_event_sent = True
+                        # If we have browser_session_arn AND browser_id, send event once
+                        if browser_session_arn and browser_id_from_stream and not browser_session_event_sent:
+                            # ✅ SEND BROWSER SESSION EVENT ONCE (when we have both session and ID)
+                            event_data = {
+                                "type": "browser_session_detected",
+                                "browserSessionId": browser_session_arn,
+                                "browserId": browser_id_from_stream,
+                                "message": "Browser session started - Live View available"
+                            }
+                            logger.info(f"🔴 [Live View] Sending browser session event with both session and ID: {browser_id_from_stream}")
+                            yield event_data
+                            browser_session_event_sent = True
+
+                        # Handle screenshot artifacts (auto-save to workspace)
+                        for artifact in task.artifacts:
+                            artifact_name = artifact.name if hasattr(artifact, 'name') else 'unnamed'
+
+                            if artifact_name == 'screenshot':
+                                logger.info(f"📸 [Screenshot] Found screenshot artifact")
+
+                                # Extract screenshot data and metadata
+                                if hasattr(artifact, 'parts') and artifact.parts:
+                                    for part in artifact.parts:
+                                        # Get base64 screenshot data
+                                        screenshot_b64 = None
+                                        if hasattr(part, 'root') and hasattr(part.root, 'text'):
+                                            screenshot_b64 = part.root.text
+                                        elif hasattr(part, 'text'):
+                                            screenshot_b64 = part.text
+
+                                        if screenshot_b64:
+                                            # Extract metadata
+                                            metadata = artifact.metadata if hasattr(artifact, 'metadata') else {}
+                                            filename = metadata.get('filename', f'screenshot_{uuid4()}.png')
+                                            description = metadata.get('description', 'Browser screenshot')
+
+                                            logger.info(f"📸 [Screenshot] Processing: {filename} - {description}")
+
+                                            try:
+                                                # Decode base64 to bytes
+                                                import base64
+                                                screenshot_bytes = base64.b64decode(screenshot_b64)
+
+                                                # Save to workspace via ImageManager
+                                                from workspace import ImageManager
+                                                session_id = tool_context.invocation_state.get('session_id', 'unknown')
+                                                user_id = os.environ.get('USER_ID', 'default_user')
+
+                                                image_manager = ImageManager(user_id=user_id, session_id=session_id)
+                                                image_manager.save_to_s3(filename, screenshot_bytes)
+
+                                                logger.info(f"📸 [Screenshot] ✅ Saved to workspace: {filename}")
+
+                                                # Add text notification to response_text for LLM context
+                                                screenshot_notification = f"\n\n**📸 Screenshot Saved**\n- **Filename**: {filename}\n- **Description**: {description}\n"
+                                                response_text += screenshot_notification
+
+                                            except Exception as e:
+                                                logger.error(f"📸 [Screenshot] ❌ Failed to save: {str(e)}")
+                                                error_notification = f"\n\n**📸 Screenshot Error**: Failed to save {filename}\n"
+                                                response_text += error_notification
+
+                                            break
 
                         # Check for browser_step_N artifacts (real-time step streaming)
                         # This runs EVERY iteration, not just when extracting browser_session_arn
