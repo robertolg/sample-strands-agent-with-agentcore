@@ -63,7 +63,7 @@
       "icon": "📝",
       "enabled": true,
       "isDynamic": true,
-      "systemPromptGuidance": "Word Document Best Practices:\n\n**Sequential Execution Required:** Run modification tools sequentially, never in parallel (prevents race conditions on S3 file read/write).\n\n**When to Use:**\n- create_word_document: User asks to create/generate a NEW Word document\n- modify_word_document: User asks to edit/modify/update an EXISTING document or add content to existing document\n- list_my_word_documents: User asks what documents are available\n- read_word_document: User wants to download a document\n\n**Filenames:** Letters, numbers, hyphens only (e.g., \"sales-report.docx\")\n\n**Available Libraries:**\n- python-docx (document creation)\n- matplotlib, pandas, numpy (charts and data)\n- Note: seaborn NOT available - use matplotlib instead\n\n**Formatting:**\n- ALWAYS preserve existing styles, fonts, colors\n- NEVER use paragraph.text = 'new text' (destroys formatting)\n- Use runs to modify text while preserving formatting",
+      "systemPromptGuidance": "Word Document Best Practices:\n\n**Sequential Execution Required:** Run modification tools sequentially, never in parallel (prevents race conditions on S3 file read/write).\n\n**When to Use:**\n- create_word_document: User asks to create/generate a NEW Word document\n- modify_word_document: User asks to edit/modify/update an EXISTING document or add content to existing document\n- list_my_word_documents: User asks what documents are available\n- read_word_document: User wants to download a document\n\n**Filenames:** Letters, numbers, hyphens only (e.g., \"sales-report.docx\")\n\n**Available Libraries:**\n- python-docx (document creation)\n- matplotlib, pandas, numpy (charts and data)\n- Note: seaborn NOT available - use matplotlib instead\n\n**Images:** If workspace has relevant images, include them: `run.add_picture('file.png', width=Inches(6))`\n\n**Formatting:**\n- ALWAYS preserve existing styles, fonts, colors\n- NEVER use paragraph.text = 'new text' (destroys formatting)\n- Use runs to modify text while preserving formatting",
       "tags": ["report", "business", "document", "writing"],
       "tools": [
         {
@@ -96,7 +96,7 @@
       "icon": "📊",
       "enabled": true,
       "isDynamic": true,
-      "systemPromptGuidance": "Excel Spreadsheet Best Practices:\n\n**Sequential Execution Required:** Run modification tools sequentially, never in parallel (prevents race conditions on S3 file read/write).\n\n**When to Use:**\n- create_excel_spreadsheet: User asks to create/generate a NEW Excel spreadsheet\n- modify_excel_spreadsheet: User asks to edit/modify/update an EXISTING spreadsheet or add sheets/data to existing spreadsheet\n- list_my_excel_spreadsheets: User asks what spreadsheets are available\n- read_excel_spreadsheet: User wants to download a spreadsheet\n\n**Filenames:** Letters, numbers, hyphens only (e.g., \"Q4-sales.xlsx\")\n\n**Available Libraries:**\n- openpyxl (spreadsheet creation)\n- matplotlib, pandas, numpy (charts and data)\n\n**Data Structure:**\n- Use tables for structured data (TableStyleInfo)\n- Add charts for visualization (BarChart, LineChart, PieChart)\n- Format cells appropriately (Font, PatternFill, Alignment)\n- Use multiple sheets for organization\n\n**Formulas:**\n- Use Excel formulas instead of hardcoded values: '=SUM(B2:B10)', '=AVERAGE(C2:C50)'\n- Avoid circular references (A1='=A1+1' or A1='=B1' and B1='=A1')",
+      "systemPromptGuidance": "Excel Spreadsheet Best Practices:\n\n**Sequential Execution Required:** Run modification tools sequentially, never in parallel (prevents race conditions on S3 file read/write).\n\n**When to Use:**\n- create_excel_spreadsheet: User asks to create/generate a NEW Excel spreadsheet\n- modify_excel_spreadsheet: User asks to edit/modify/update an EXISTING spreadsheet or add sheets/data to existing spreadsheet\n- list_my_excel_spreadsheets: User asks what spreadsheets are available\n- read_excel_spreadsheet: User wants to download a spreadsheet\n\n**Filenames:** Letters, numbers, hyphens only (e.g., \"Q4-sales.xlsx\")\n\n**Available Libraries:**\n- openpyxl (spreadsheet creation)\n- matplotlib, pandas, numpy (charts and data)\n\n**Images:** If workspace has relevant images: `from openpyxl.drawing.image import Image; ws.add_image(Image('file.png'), 'E1')`\n\n**Data Structure:**\n- Use tables for structured data (TableStyleInfo)\n- Add charts for visualization (BarChart, LineChart, PieChart)\n- Format cells appropriately (Font, PatternFill, Alignment)\n- Use multiple sheets for organization\n\n**Formulas:**\n- Use Excel formulas instead of hardcoded values: '=SUM(B2:B10)', '=AVERAGE(C2:C50)'\n- Avoid circular references (A1='=A1+1' or A1='=B1' and B1='=A1')",
       "tags": ["report", "business", "finance", "data", "analysis"],
       "tools": [
         {
@@ -129,7 +129,7 @@
       "icon": "📊",
       "enabled": true,
       "isDynamic": true,
-      "systemPromptGuidance": "PowerPoint Best Practices:\n\n**CRITICAL Rules:**\n- Batch required: 1 call for all slides (parallel calls = data loss)\n- Operations: update_text, update_image only\n- update_text: replaces entire element (use \\n for multi-line)\n- Output name must differ from source\n\n**Text Editing:**\n- Preserve original text length when possible\n- Long existing text often indicates design constraints\n- Be concise - not all improvements need longer text\n- Consider layout: expanding text can break visual design\n\n**Position Info:**\n- analyze shows element positions: (left\", top\", width\"×height\")\n- Helps understand layout: titles ~top:0.3\", bodies ~top:1.5\"\n\n**Speaker Notes:**\n- analyze shows existing notes\n- Use update_slide_notes when user wants to review/modify notes\n\n**File Handling:**\n- Existing/uploaded files: use modify tools only (create_presentation destroys layout)\n- New files: create_presentation(name, outline, template_name)\n\n**Rules:**\n- Names: letters, numbers, hyphens only\n- Indices: 0-based (slides & elements)",
+      "systemPromptGuidance": "PowerPoint Best Practices:\n\n**CRITICAL Rules:**\n- Batch required: 1 call for all slides (parallel calls = data loss)\n- Operations: update_text, update_image only\n- update_text: replaces entire element (use \\n for multi-line)\n- Output name must differ from source\n\n**Images:** If workspace has relevant images: `slide.shapes.add_picture('file.png', Inches(1), Inches(2), width=Inches(8))`\n\n**Text Editing:**\n- Preserve original text length when possible\n- Long existing text often indicates design constraints\n- Be concise - not all improvements need longer text\n- Consider layout: expanding text can break visual design\n\n**Position Info:**\n- analyze shows element positions: (left\", top\", width\"×height\")\n- Helps understand layout: titles ~top:0.3\", bodies ~top:1.5\"\n\n**Speaker Notes:**\n- analyze shows existing notes\n- Use update_slide_notes when user wants to review/modify notes\n\n**File Handling:**\n- Existing/uploaded files: use modify tools only (create_presentation destroys layout)\n- New files: create_presentation(name, outline, template_name)\n\n**Rules:**\n- Names: letters, numbers, hyphens only\n- Indices: 0-based (slides & elements)",
       "tags": ["presentation", "business", "report", "pitch"],
       "tools": [
         {
@@ -189,12 +189,12 @@
     {
       "id": "browser_automation",
       "name": "Nova Act Browser Control",
-      "description": "Web browser automation powered by Nova Act AI (6 tools)",
+      "description": "Web browser automation powered by Nova Act AI (7 tools)",
       "category": "browser_automation_agents",
       "icon": "🌐",
       "enabled": true,
       "isDynamic": true,
-      "systemPromptGuidance": "Browser Automation Best Practices:\n\n**Plan First:** Before starting browser work, outline the complete workflow. Consider which tools handle each step.\n\n**Agent Tools:** act and extract are agents handling sequential tasks (2-6 steps). Good for visible UI workflows: navigation sequences, form filling, multi-screen data collection.\n\n**Screenshot Capture:** Use browser_save_screenshot at important milestones to capture visual evidence. Screenshots are saved to workspace with the specified filename and become automatically available to other tools.\n\n**Tool Synergy:** Browser extracts UI-visible data (listings, prices, titles). When search tools are available, use them for detailed content (reviews, articles, specifications).\n\n**On Failure:** If browser task fails, simplify the instruction, reduce extraction schema complexity, or pivot to alternative tools (get_page_info for structure, search APIs for content).",
+      "systemPromptGuidance": "Browser Automation Best Practices:\n\n**When to Use Browser Tools:**\n- Target a SPECIFIC website/URL\n- Analyze web UI elements, layout, or interactive features\n- Tasks requiring login, form submission, or multi-step navigation\n- Extract data visible only after user interactions (clicks, scrolls, filters)\n\n**Tool Selection:**\n- navigate + act: UI interactions (click, type, scroll, form fill)\n- extract: Structured data from visible content (auto-scrolls)\n- get_page_info: Fast page structure check\n- drag: For drawing, drag-and-drop, resizing, sliders. Requires coordinates - use get_page_info first to understand viewport size.\n- save_screenshot: Capture visual evidence for documents or reports\n\n**On Failure:** Simplify instruction, reduce schema complexity, or pivot to search APIs.",
       "tags": ["shopping", "automation", "scraping", "research"],
       "tools": [
         {
@@ -205,7 +205,7 @@
         {
           "id": "browser_act",
           "name": "Browser Action",
-          "description": "Execute browser actions using natural language"
+          "description": "Execute browser actions using natural language (click, type, scroll, select). Does NOT support drag - use browser_drag instead."
         },
         {
           "id": "browser_extract",
@@ -221,6 +221,11 @@
           "id": "browser_manage_tabs",
           "name": "Manage Tabs",
           "description": "Switch, close, or create browser tabs (use get_page_info to view tabs)"
+        },
+        {
+          "id": "browser_drag",
+          "name": "Drag",
+          "description": "Drag from start to end coordinates (for drawing, resizing, moving elements)"
         },
         {
           "id": "browser_save_screenshot",

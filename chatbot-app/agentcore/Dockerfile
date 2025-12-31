@@ -15,11 +15,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
+# Note: bedrock-agentcore version is pinned in requirements.txt
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install AgentCore Memory integration
-RUN pip install --no-cache-dir "bedrock-agentcore[strands-agents]>=0.1.0"
 
 # Copy application code
 COPY src/ ./src/

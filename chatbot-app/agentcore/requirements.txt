@@ -29,7 +29,7 @@ ddgs>=9.0.0
 # OpenTelemetry (for observability)
 aws-opentelemetry-distro>=0.10.1
 
-bedrock-agentcore
+bedrock-agentcore==1.1.1
 
 # Nova Act SDK (for natural language browser automation via AgentCore Browser)
 # Nova Act includes playwright as a dependency, so no need to install it separately

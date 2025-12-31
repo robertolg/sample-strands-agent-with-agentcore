@@ -634,10 +634,10 @@ export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({
               )}
             </div>
 
-            {/* Tool Images - Rendered outside tool execution field with horizontal scroll */}
+            {/* Tool Images - Rendered outside tool execution field */}
             {toolExecution.images && toolExecution.images.length > 0 && (
-              <div className="mt-6 -mx-2">
-                <div className="flex gap-4 overflow-x-auto px-2 pb-2">
+              <div className="mt-4">
+                <div className="space-y-4">
                   {toolExecution.images
                     .filter((image) => {
                       // Filter to only valid images with actual URLs or data
@@ -687,13 +687,13 @@ export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({
                     };
 
                     return (
-                      <div key={idx} className="relative flex-shrink-0 w-[380px]">
-                        {/* Image Container */}
-                        <div className="relative rounded-xl overflow-hidden border border-border shadow-md hover:shadow-xl transition-all duration-200 cursor-pointer bg-gray-50 dark:bg-gray-900 hover:scale-[1.02]" onClick={handleClick}>
+                      <div key={idx} className="relative w-full">
+                        {/* Image Container - Full width */}
+                        <div className="relative rounded-xl overflow-hidden border border-border shadow-md hover:shadow-xl transition-all duration-200 cursor-pointer bg-gray-50 dark:bg-gray-900" onClick={handleClick}>
                           <LazyImage
                             src={imageSrc}
                             alt={imageTitle}
-                            className="w-full h-[280px] object-cover"
+                            className="w-full h-auto object-contain"
                           />
 
                           {/* Badge Overlay - Always visible */}
@@ -723,30 +723,28 @@ export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({
       })}
       </div>
 
-      {/* Image Modal */}
+      {/* Image Modal - 1.5x size */}
       {selectedImage && (
         <div
-          className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-2"
+          className="fixed inset-0 bg-black/90 flex items-center justify-center z-50"
           onClick={() => setSelectedImage(null)}
         >
-          <div className="relative max-w-[95vw] max-h-[95vh]">
+          <div className="relative" style={{ maxWidth: '90vw', maxHeight: '90vh' }}>
             <img
               src={selectedImage.src}
               alt={selectedImage.alt}
-              className="max-w-full max-h-[95vh] object-contain rounded-lg cursor-zoom-out"
+              className="object-contain cursor-zoom-out rounded-lg"
+              style={{ maxWidth: 'min(90vw, 150%)', maxHeight: '85vh' }}
               onClick={(e) => e.stopPropagation()}
             />
             <button
               onClick={() => setSelectedImage(null)}
-              className="absolute top-4 right-4 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-colors"
+              className="absolute -top-3 -right-3 bg-white/90 hover:bg-white text-gray-800 rounded-full p-1.5 shadow-lg transition-colors"
             >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
-            <div className="absolute bottom-4 left-4 bg-black/50 text-white px-3 py-1 rounded text-sm">
-              {selectedImage.alt}
-            </div>
           </div>
         </div>
       )}

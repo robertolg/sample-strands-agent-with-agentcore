@@ -1814,6 +1814,8 @@ def create_presentation(
         - "image": Image (content: image path or dict)
         - "table": Table (content: dict with headers/rows)
         - "custom": Execute custom python-pptx code (custom_code: string)
+                    NOTE: Title is auto-set from "title" field. Do NOT add title
+                    textbox in custom_code - only add images, charts, or body content.
 
     Example (blank with default minimal theme):
         create_presentation("new-deck", outline=None, template_name=None)

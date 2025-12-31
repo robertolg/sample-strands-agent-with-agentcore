@@ -579,3 +579,272 @@ class TestImageToolFullFlow:
         assert frontend_data["status"] == "error"
         # No images in error response
         assert "images" not in frontend_data or len(frontend_data.get("images", [])) == 0
+
+
+# ============================================================
+# Browser Tool JSON Serialization Tests
+# ============================================================
+
+class TestBrowserToolJsonSerialization:
+    """Tests that browser tool results are JSON serializable.
+
+    Browser tools return results that must be JSON serializable because
+    they are sent directly to the Strands agent message creation which
+    requires JSON encoding. Raw bytes will cause:
+    'Object of type bytes is not JSON serializable'
+    """
+
+    def test_browser_navigate_result_json_serializable(self, sample_jpeg_bytes):
+        """Test browser_navigate result format is JSON serializable.
+
+        Browser tools use source.data (base64 string) instead of source.bytes (raw bytes)
+        to ensure JSON serialization works with AgentCoreMemorySessionManager.
+        """
+        # Simulate what browser_navigate returns (with base64 in 'data' field)
+        navigate_result = {
+            "content": [
+                {"text": "✅ **Navigated to**: https://example.com\n**Page Title**: Example"},
+                {
+                    "image": {
+                        "format": "jpeg",
+                        "source": {
+                            "data": base64.b64encode(sample_jpeg_bytes).decode('utf-8')
+                        }
+                    }
+                }
+            ],
+            "status": "success",
+            "metadata": {"browserSessionId": "session-123"}
+        }
+
+        # Must be JSON serializable - this is the critical test
+        json_str = json.dumps(navigate_result)
+        assert "example.com" in json_str
+
+        # Verify round-trip
+        parsed = json.loads(json_str)
+        assert parsed["status"] == "success"
+
+        # Verify image data can be decoded back to original bytes
+        image_data = parsed["content"][1]["image"]["source"]["data"]
+        decoded_bytes = base64.b64decode(image_data)
+        assert decoded_bytes == sample_jpeg_bytes
+
+    def test_browser_drag_result_json_serializable(self, sample_jpeg_bytes):
+        """Test browser_drag result format is JSON serializable."""
+        # Simulate what browser_drag returns (with optional screenshot)
+        drag_result = {
+            "content": [
+                {"text": "✅ **Drag completed**\n\n**From**: (100, 100)\n**To**: (300, 200)"}
+            ],
+            "status": "success",
+            "metadata": {}
+        }
+
+        # Without screenshot - must be serializable
+        json_str = json.dumps(drag_result)
+        assert "Drag completed" in json_str
+
+        # With screenshot - must also be serializable (uses source.data)
+        drag_result_with_screenshot = {
+            "content": [
+                {"text": "✅ **Drag completed**\n\n**From**: (100, 100)\n**To**: (300, 200)"},
+                {
+                    "image": {
+                        "format": "jpeg",
+                        "source": {
+                            "data": base64.b64encode(sample_jpeg_bytes).decode('utf-8')
+                        }
+                    }
+                }
+            ],
+            "status": "success",
+            "metadata": {}
+        }
+
+        json_str = json.dumps(drag_result_with_screenshot)
+        assert "Drag completed" in json_str
+
+    def test_raw_bytes_not_json_serializable(self, sample_jpeg_bytes):
+        """Verify that raw bytes cause JSON serialization error (the bug we fixed).
+
+        This demonstrates why browser tools now use source.data instead of source.bytes.
+        """
+        # This is what the browser tools were returning BEFORE the fix
+        bad_result = {
+            "content": [
+                {"text": "Result"},
+                {
+                    "image": {
+                        "format": "jpeg",
+                        "source": {
+                            "bytes": sample_jpeg_bytes  # Raw bytes - NOT serializable!
+                        }
+                    }
+                }
+            ],
+            "status": "success"
+        }
+
+        # This should fail - demonstrating the bug
+        with pytest.raises(TypeError, match="not JSON serializable"):
+            json.dumps(bad_result)
+
+    def test_source_data_format_json_serializable(self, sample_jpeg_bytes):
+        """Verify that source.data format (base64 string) IS JSON serializable.
+
+        This is the format browser tools now use for cloud compatibility.
+        """
+        # This is what the browser tools return AFTER the fix
+        good_result = {
+            "content": [
+                {"text": "Result"},
+                {
+                    "image": {
+                        "format": "jpeg",
+                        "source": {
+                            "data": base64.b64encode(sample_jpeg_bytes).decode('utf-8')
+                        }
+                    }
+                }
+            ],
+            "status": "success"
+        }
+
+        # This should succeed
+        json_str = json.dumps(good_result)
+        parsed = json.loads(json_str)
+
+        # Verify the image data survives round-trip
+        image_b64 = parsed["content"][1]["image"]["source"]["data"]
+        decoded = base64.b64decode(image_b64)
+        assert decoded == sample_jpeg_bytes
+
+    def test_event_formatter_handles_source_data_format(self, sample_jpeg_bytes):
+        """Test that event_formatter correctly processes source.data format (cloud mode).
+
+        Browser tools use source.data for cloud compatibility.
+        Event formatter should extract this and pass to frontend.
+        """
+        from streaming.event_formatter import StreamEventFormatter
+
+        # Browser tool result with source.data (cloud-compatible format)
+        tool_result = {
+            "toolUseId": "toolu_browser_001",
+            "content": [
+                {"text": "✅ **Navigated to**: https://example.com"},
+                {
+                    "image": {
+                        "format": "jpeg",
+                        "source": {
+                            "data": base64.b64encode(sample_jpeg_bytes).decode('utf-8')
+                        }
+                    }
+                }
+            ],
+            "status": "success"
+        }
+
+        result_text, result_images = StreamEventFormatter._extract_basic_content(tool_result)
+
+        # Should extract text
+        assert "Navigated to" in result_text
+
+        # Should extract image from source.data
+        assert len(result_images) == 1
+        assert result_images[0]["format"] == "jpeg"
+
+        # Image data should be base64 string
+        image_data = result_images[0]["data"]
+        assert isinstance(image_data, str)
+
+        # Should decode back to original bytes
+        decoded = base64.b64decode(image_data)
+        assert decoded == sample_jpeg_bytes
+
+    def test_event_formatter_handles_source_bytes_format(self, sample_png_bytes):
+        """Test that event_formatter correctly processes source.bytes format (local mode).
+
+        Diagram tool and other tools use source.bytes with raw bytes.
+        Event formatter should convert to base64 for frontend.
+        """
+        from streaming.event_formatter import StreamEventFormatter
+
+        # Tool result with source.bytes (raw bytes - local mode compatible)
+        tool_result = {
+            "toolUseId": "toolu_diagram_001",
+            "content": [
+                {"text": "✅ **Diagram generated**"},
+                {
+                    "image": {
+                        "format": "png",
+                        "source": {
+                            "bytes": sample_png_bytes  # Raw bytes
+                        }
+                    }
+                }
+            ],
+            "status": "success"
+        }
+
+        result_text, result_images = StreamEventFormatter._extract_basic_content(tool_result)
+
+        # Should extract text
+        assert "Diagram generated" in result_text
+
+        # Should extract and convert image from source.bytes
+        assert len(result_images) == 1
+        assert result_images[0]["format"] == "png"
+
+        # Image data should be converted to base64 string
+        image_data = result_images[0]["data"]
+        assert isinstance(image_data, str)
+
+        # Should decode back to original bytes
+        decoded = base64.b64decode(image_data)
+        assert decoded == sample_png_bytes
+
+    def test_event_formatter_handles_both_formats_in_same_result(self, sample_jpeg_bytes, sample_png_bytes):
+        """Test that event_formatter handles mixed source.data and source.bytes."""
+        from streaming.event_formatter import StreamEventFormatter
+
+        # Mixed format (unlikely but should be handled)
+        tool_result = {
+            "toolUseId": "toolu_mixed_001",
+            "content": [
+                {"text": "Multiple images"},
+                {
+                    "image": {
+                        "format": "jpeg",
+                        "source": {
+                            "data": base64.b64encode(sample_jpeg_bytes).decode('utf-8')
+                        }
+                    }
+                },
+                {
+                    "image": {
+                        "format": "png",
+                        "source": {
+                            "bytes": sample_png_bytes
+                        }
+                    }
+                }
+            ],
+            "status": "success"
+        }
+
+        result_text, result_images = StreamEventFormatter._extract_basic_content(tool_result)
+
+        # Should extract both images
+        assert len(result_images) == 2
+
+        # Both should be base64 strings
+        assert all(isinstance(img["data"], str) for img in result_images)
+
+        # Verify correct formats
+        assert result_images[0]["format"] == "jpeg"
+        assert result_images[1]["format"] == "png"
+
+        # Verify data integrity
+        assert base64.b64decode(result_images[0]["data"]) == sample_jpeg_bytes
+        assert base64.b64decode(result_images[1]["data"]) == sample_png_bytes

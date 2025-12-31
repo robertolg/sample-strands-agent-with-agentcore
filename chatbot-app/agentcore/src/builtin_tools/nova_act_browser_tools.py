@@ -154,6 +154,7 @@ def browser_act(instruction: str, tool_context: ToolContext) -> Dict[str, Any]:
     - Can execute 2-3 related steps in sequence when visible on screen
 
     Limitations:
+    - Does NOT support drag operations - use browser_drag instead for drawing, resizing, or moving elements
     - Has 3-step limit. If fails, simplify instruction or try different tool
     - For DOM attributes, use browser_get_page_info()
 
@@ -708,16 +709,143 @@ Current tab screenshot shown below."""
 
 
 @tool(context=True)
+def browser_drag(
+    start_x: int,
+    start_y: int,
+    end_x: int,
+    end_y: int,
+    steps: int = 10,
+    include_screenshot: bool = False,
+    tool_context: ToolContext = None
+) -> Dict[str, Any]:
+    """
+    Drag from start coordinates to end coordinates using Playwright.
+    Useful for drawing, resizing elements, moving objects, or slider controls.
+
+    Args:
+        start_x: X coordinate to start drag (pixels from left edge of viewport)
+        start_y: Y coordinate to start drag (pixels from top edge of viewport)
+        end_x: X coordinate to end drag (pixels from left edge of viewport)
+        end_y: Y coordinate to end drag (pixels from top edge of viewport)
+        steps: Number of intermediate points for smooth movement (default: 10)
+        include_screenshot: Whether to include screenshot in response (default: False, saves ~1s)
+
+    Tip: Use browser_get_page_info() first to understand page dimensions and viewport size.
+    Set include_screenshot=True when you need to verify the result visually.
+    """
+    try:
+        # Get session_id from ToolContext
+        session_id = tool_context.invocation_state.get("session_id")
+        if not session_id and hasattr(tool_context.agent, '_session_manager'):
+            session_id = tool_context.agent._session_manager.session_id
+            logger.info(f"[browser_drag] Using session_id from agent._session_manager: {session_id}")
+        elif session_id:
+            logger.info(f"[browser_drag] Using session_id from invocation_state: {session_id}")
+        else:
+            raise ValueError("session_id not found in ToolContext")
+
+        controller = get_or_create_controller(session_id)
+
+        # Ensure browser is connected
+        if not controller._connected:
+            controller.connect()
+
+        # Get the current page
+        page = controller._get_current_page()
+        if not page:
+            return {
+                "content": [{
+                    "text": "❌ **Drag failed**: No active browser page"
+                }],
+                "status": "error"
+            }
+
+        logger.info(f"Dragging from ({start_x}, {start_y}) to ({end_x}, {end_y}) with {steps} steps")
+
+        # Perform drag using Playwright's mouse API
+        page.mouse.move(start_x, start_y)
+        page.mouse.down()
+        page.mouse.move(end_x, end_y, steps=steps)
+        page.mouse.up()
+
+        # Get current page info
+        current_url = page.url
+        page_title = page.title()
+
+        # Format tab summary if multiple tabs
+        tab_summary = _format_tab_summary(
+            controller.get_tab_list(),
+            controller._current_tab_index
+        )
+        tab_line = f"\n{tab_summary}" if tab_summary else ""
+
+        content = [{
+            "text": f"""✅ **Drag completed**
+
+**From**: ({start_x}, {start_y})
+**To**: ({end_x}, {end_y})
+**Steps**: {steps}
+**Current URL**: {current_url}
+**Page Title**: {page_title}{tab_line}"""
+        }]
+
+        # Only take screenshot if requested
+        if include_screenshot:
+            screenshot_data = controller._take_screenshot()
+            if screenshot_data:
+                content[0]["text"] += "\n\nScreenshot captured below."
+                content.append({
+                    "image": {
+                        "format": "jpeg",
+                        "source": {
+                            "bytes": screenshot_data  # Raw bytes
+                        }
+                    }
+                })
+
+        # Get browser session info for Live View
+        metadata = {}
+        if controller.browser_session_client and controller.browser_session_client.session_id:
+            metadata["browserSessionId"] = controller.browser_session_client.session_id
+            if controller.browser_id:
+                metadata["browserId"] = controller.browser_id
+
+        return {
+            "content": content,
+            "status": "success",
+            "metadata": metadata
+        }
+
+    except Exception as e:
+        logger.error(f"browser_drag failed: {e}")
+        return {
+            "content": [{
+                "text": f"❌ **Drag error**: {str(e)}"
+            }],
+            "status": "error"
+        }
+
+
+@tool(context=True)
 def browser_save_screenshot(filename: str, tool_context: ToolContext) -> Dict[str, Any]:
     """
-    Save current browser screenshot to workspace.
-    Saved images can be referenced by filename in document tools.
+    Save current browser screenshot to workspace for use in documents/reports.
+
+    IMPORTANT: Browser screenshots are NOT automatically saved. Other browser tools
+    (navigate, act, etc.) only display screenshots in chat - they don't persist them.
+    You MUST call this tool to save a screenshot to workspace.
+
+    When to use:
+    - User wants to include browser screenshots in Word/PowerPoint documents
+    - User asks to "capture" or "save" what's on the browser screen
+    - Creating visual evidence or documentation of web pages
 
     Args:
         filename: Image filename (e.g., "search-results.png", "product-page.jpg")
                  Must end with .png, .jpg, or .jpeg
 
-    Returns text confirmation of saved location.
+    Returns text confirmation with saved location. The saved image can then be
+    referenced by filename in document tools (Word, Excel, PowerPoint).
     """
     try:
         # Validate filename

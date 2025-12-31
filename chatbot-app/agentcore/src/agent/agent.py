@@ -431,18 +431,43 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
             # Cloud deployment: Use AgentCore Memory
             logger.info(f"🚀 Cloud mode: Using AgentCore Memory (memory_id={memory_id})")
 
-            # Configure AgentCore Memory with user preferences and facts retrieval
+            # Get strategy IDs dynamically from Memory configuration
+            strategy_ids = self._get_memory_strategy_ids(memory_id, aws_region)
+
+            # Build retrieval_config using actual namespace patterns from Memory strategies
+            # Namespace pattern: /strategies/{memoryStrategyId}/actors/{actorId}
+            retrieval_config = {}
+
+            # User preferences (coding style, language preference, etc.)
+            if 'USER_PREFERENCE' in strategy_ids:
+                pref_namespace = f"/strategies/{strategy_ids['USER_PREFERENCE']}/actors/{self.user_id}"
+                retrieval_config[pref_namespace] = RetrievalConfig(top_k=5, relevance_score=0.7)
+                logger.info(f"📝 User preferences namespace: {pref_namespace}")
+
+            # Semantic facts (learned information about user)
+            if 'SEMANTIC' in strategy_ids:
+                facts_namespace = f"/strategies/{strategy_ids['SEMANTIC']}/actors/{self.user_id}"
+                retrieval_config[facts_namespace] = RetrievalConfig(top_k=10, relevance_score=0.3)
+                logger.info(f"📚 Semantic facts namespace: {facts_namespace}")
+
+            # Session summaries (previous conversation summaries)
+            # Note: Summary namespace includes sessionId, so we use a broader pattern for cross-session retrieval
+            if 'SUMMARIZATION' in strategy_ids:
+                # For summaries, we retrieve from the actor-level to get summaries across sessions
+                summary_namespace = f"/strategies/{strategy_ids['SUMMARIZATION']}/actors/{self.user_id}"
+                retrieval_config[summary_namespace] = RetrievalConfig(top_k=3, relevance_score=0.5)
+                logger.info(f"📋 Session summaries namespace: {summary_namespace}")
+
+            if not retrieval_config:
+                logger.warning("⚠️ No retrieval_config configured - LTM retrieval disabled")
+
+            # Configure AgentCore Memory with dynamic retrieval config
             agentcore_memory_config = AgentCoreMemoryConfig(
                 memory_id=memory_id,
                 session_id=session_id,
                 actor_id=self.user_id,
                 enable_prompt_caching=caching_enabled if caching_enabled is not None else True,
-                retrieval_config={
-                    # User-specific preferences (e.g., coding style, language preference)
-                    f"/preferences/{self.user_id}": RetrievalConfig(top_k=5, relevance_score=0.7),
-                    # User-specific facts (e.g., learned information)
-                    f"/facts/{self.user_id}": RetrievalConfig(top_k=10, relevance_score=0.3),
-                }
+                retrieval_config=retrieval_config
             )
 
             # Use AgentCore Memory Session Manager directly (no buffering)
@@ -453,6 +478,7 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
             )
 
             logger.info(f"✅ AgentCore Memory initialized (direct mode): user_id={self.user_id}")
+            logger.info(f"   LTM retrieval: {len(retrieval_config)} namespace(s) configured")
         else:
             # Local development: Use file-based session manager with buffering wrapper
             logger.info(f"💻 Local mode: Using FileSessionManager with buffering")
@@ -491,6 +517,38 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
         """
         project_name = os.environ.get('PROJECT_NAME', 'strands-agent-chatbot')
         return f"{project_name}-users-v2"
+
+    def _get_memory_strategy_ids(self, memory_id: str, aws_region: str) -> Dict[str, str]:
+        """
+        Get Memory Strategy IDs from AgentCore Memory.
+
+        Returns a dict mapping strategy type to strategy ID:
+        {
+            'USER_PREFERENCE': 'user_preference_extraction-xxxxx',
+            'SEMANTIC': 'semantic_fact_extraction-xxxxx',
+            'SUMMARIZATION': 'conversation_summary-xxxxx'
+        }
+        """
+        import boto3
+
+        try:
+            gmcp = boto3.client('bedrock-agentcore-control', region_name=aws_region)
+            response = gmcp.get_memory(memoryId=memory_id)
+            memory = response['memory']
+            strategies = memory.get('strategies', memory.get('memoryStrategies', []))
+
+            strategy_map = {}
+            for s in strategies:
+                strategy_type = s.get('type', s.get('memoryStrategyType', ''))
+                strategy_id = s.get('strategyId', s.get('memoryStrategyId', ''))
+                if strategy_type and strategy_id:
+                    strategy_map[strategy_type] = strategy_id
+                    logger.info(f"Found strategy: {strategy_type} -> {strategy_id}")
+
+            return strategy_map
+        except Exception as e:
+            logger.warning(f"Failed to get memory strategy IDs: {e}")
+            return {}
 
     def _load_tool_guidance(self) -> List[str]:
         """
