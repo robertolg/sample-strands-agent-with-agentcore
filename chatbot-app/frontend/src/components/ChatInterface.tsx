@@ -20,7 +20,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { SidebarTrigger, SidebarInset, useSidebar } from "@/components/ui/sidebar"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Upload, Send, FileText, ImageIcon, Square, Bot, Brain, Maximize2, Minimize2, Moon, Sun, FlaskConical, Loader2, ArrowDown } from "lucide-react"
+import { Upload, Send, FileText, ImageIcon, Square, Bot, Brain, Maximize2, Minimize2, Moon, Sun, FlaskConical, Loader2, ArrowDown, Download } from "lucide-react"
 import { ModelConfigDialog } from "@/components/ModelConfigDialog"
 import { apiGet } from "@/lib/api-client"
 import { useTheme } from "next-themes"
@@ -352,6 +352,70 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     localStorage.setItem('chatWideMode', isWideMode.toString())
   }, [isWideMode])
 
+  // Export conversation to text file
+  const exportConversation = useCallback(() => {
+    if (groupedMessages.length === 0) return
+
+    const lines: string[] = []
+    const now = new Date()
+    const dateStr = now.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' })
+    const timeStr = now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+
+    lines.push(`=== Chat Export ===`)
+    lines.push(`Date: ${dateStr} ${timeStr}`)
+    lines.push(`Session: ${sessionId || 'N/A'}`)
+    lines.push(`${'='.repeat(40)}`)
+    lines.push('')
+
+    for (const group of groupedMessages) {
+      for (const message of group.messages) {
+        const sender = message.sender === 'user' ? '👤 User' : '🤖 Assistant'
+        const time = new Date(message.timestamp).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+
+        lines.push(`[${time}] ${sender}:`)
+
+        // Add message text
+        if (message.text && message.text.trim()) {
+          lines.push(message.text.trim())
+        }
+
+        // Add tool executions summary
+        if (message.toolExecutions && message.toolExecutions.length > 0) {
+          for (const tool of message.toolExecutions) {
+            lines.push(`  📦 Tool: ${tool.toolName}`)
+            if (tool.toolResult) {
+              const resultPreview = tool.toolResult.length > 200
+                ? tool.toolResult.substring(0, 200) + '...'
+                : tool.toolResult
+              lines.push(`  └─ Result: ${resultPreview}`)
+            }
+          }
+        }
+
+        // Add uploaded files info
+        if (message.uploadedFiles && message.uploadedFiles.length > 0) {
+          lines.push(`  📎 Files: ${message.uploadedFiles.map(f => f.name).join(', ')}`)
+        }
+
+        lines.push('')
+      }
+    }
+
+    lines.push(`${'='.repeat(40)}`)
+    lines.push(`Total messages: ${groupedMessages.reduce((acc, g) => acc + g.messages.length, 0)}`)
+
+    const content = lines.join('\n')
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `chat-export-${now.toISOString().slice(0, 10)}.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, [groupedMessages, sessionId])
+
   // Load current model name
   const loadCurrentModel = useCallback(async () => {
     try {
@@ -532,6 +596,32 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
         handleSendMessage(syntheticEvent, selectedFiles)
         setSelectedFiles([])
       }
+    }
+  }
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+
+    const imageFiles: File[] = []
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) {
+          // Create a new file with a proper name (clipboard images have no name)
+          const extension = item.type.split('/')[1] || 'png'
+          const namedFile = new File([file], `clipboard-image-${Date.now()}.${extension}`, {
+            type: file.type
+          })
+          imageFiles.push(namedFile)
+        }
+      }
+    }
+
+    if (imageFiles.length > 0) {
+      e.preventDefault() // Prevent default paste behavior for images
+      setSelectedFiles(prev => [...prev, ...imageFiles])
     }
   }
 
@@ -761,6 +851,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
                 onCompositionStart={() => {
                   isComposingRef.current = true
                 }}
@@ -868,9 +959,27 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
             {/* Spacer */}
             <div className="flex-1"></div>
 
-            {/* Right: Theme toggle and Wide mode toggle */}
+            {/* Right: Export, Theme toggle and Wide mode toggle */}
             <TooltipProvider delayDuration={300}>
               <div className="flex items-center gap-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={exportConversation}
+                      disabled={groupedMessages.length === 0}
+                      className="h-7 px-2 hover:bg-muted-foreground/10 transition-all duration-200 disabled:opacity-40"
+                    >
+                      <Download className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Export conversation</p>
+                  </TooltipContent>
+                </Tooltip>
+
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

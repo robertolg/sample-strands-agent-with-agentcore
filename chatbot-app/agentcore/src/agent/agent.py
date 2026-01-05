@@ -148,14 +148,47 @@ class ResearchApprovalHook(HookProvider):
 
 
 class ConversationCachingHook(HookProvider):
-    """Hook to add cache points to conversation history before model calls
+    """Hook to add a single cache point at the end of the last Assistant message
 
-    Strategy:
-    - Maintain 3 cache points in conversation (sliding window)
-    - Prioritize recent assistant messages and tool results
-    - When limit reached, remove oldest cache point and add new one
-    - Combined with system prompt cache = 4 total cache breakpoints (Bedrock limit)
-    - Sliding cache points keep the most recent turns cached for optimal efficiency
+    Strategy: Position B - Cache Point after Assistant Message (Universal)
+
+    Key insight: A cache point means "cache everything up to this point".
+    Placing the CP at the end of the last Assistant message works for:
+    - Pure conversation (no tools) ✓
+    - Agent loops with tool calls ✓
+    - Mixed scenarios ✓
+
+    Why Position B instead of Position C (after ToolResult)?
+    - Position C only works when tools are called
+    - Position B works universally - with or without tools
+    - In agent loops, Assistant message comes after ToolResult anyway,
+      so both positions cache similar content
+
+    Why only 1 cache point?
+    - Multiple cache points cause DUPLICATE write premiums (25% each)
+    - Cache point N includes everything that cache point N-1 already cached
+    - Testing showed 1 CP performs equally to 3 CPs but avoids redundant costs
+    - No need for separate system prompt caching (cache_prompt="default") - it's included
+
+    Cache efficiency:
+    - Cache WRITE: 25% premium on first write
+    - Cache READ: 90% discount on subsequent reads
+    - With 1 CP: Pay write premium once, get full read benefits
+
+    Cross-session behavior:
+    - Cache is SESSION-BOUND (not content-based)
+    - Each session maintains isolated cache
+    - Long-running sessions maximize cache benefits
+
+    Example flow (pure conversation):
+    Turn 1: User → LLM → Assistant[CP] (WRITE)
+    Turn 2: User → LLM → Assistant[CP moved] (READ from Turn 1's prefix)
+    Turn 3: User → LLM → Assistant[CP moved] (READ)
+
+    Example flow (with tools):
+    Call 1: User → LLM → Assistant (no CP yet - first response)
+    Call 2: ToolResult → LLM → Assistant[CP] (WRITE)
+    Call 3: ToolResult → LLM → Assistant[CP moved] (READ)
     """
 
     def __init__(self, enabled: bool = True):
@@ -165,157 +198,63 @@ class ConversationCachingHook(HookProvider):
         registry.add_callback(BeforeModelCallEvent, self.add_conversation_cache_point)
 
     def add_conversation_cache_point(self, event: BeforeModelCallEvent) -> None:
-        """Add cache points to conversation history with sliding window (max 3, remove oldest when full)"""
+        """Add single cache point at the end of the last Assistant message"""
         if not self.enabled:
-            logger.debug("Caching disabled")
             return
 
         messages = event.agent.messages
         if not messages:
-            logger.debug("No messages in history")
             return
 
-        logger.debug(f"Processing caching for {len(messages)} messages")
-
-        # Debug: Log message structure to diagnose tool_use/tool_result mismatch
-        for msg_idx, msg in enumerate(messages):
-            role = msg.get("role", "unknown")
-            content = msg.get("content", [])
-            block_types = []
-            if isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict):
-                        if "toolUse" in block:
-                            block_types.append(f"toolUse({block['toolUse'].get('name', '?')})")
-                        elif "toolResult" in block:
-                            block_types.append(f"toolResult({block['toolResult'].get('toolUseId', '?')[:8]}...)")
-                        elif "text" in block:
-                            block_types.append("text")
-                        elif "cachePoint" in block:
-                            block_types.append("cachePoint")
-                        else:
-                            block_types.append(f"other({list(block.keys())})")
-                    elif isinstance(block, str):
-                        block_types.append("str")
-            logger.debug(f"  [msg {msg_idx}] role={role}, blocks={block_types}")
-
-        # Count existing cache points across all content blocks
-        existing_cache_count = 0
-        cache_point_positions = []
+        # Step 1: Find all existing cache points and the last assistant message
+        cache_point_positions = []  # [(msg_idx, block_idx), ...]
+        last_assistant_idx = None
 
         for msg_idx, msg in enumerate(messages):
+            # Track last assistant message
+            if msg.get("role") == "assistant":
+                last_assistant_idx = msg_idx
+
             content = msg.get("content", [])
-            if isinstance(content, list):
-                for block_idx, block in enumerate(content):
-                    if isinstance(block, dict) and "cachePoint" in block:
-                        existing_cache_count += 1
-                        cache_point_positions.append((msg_idx, block_idx))
+            if not isinstance(content, list):
+                continue
 
-        # If we already have 3 cache points, remove the oldest one (sliding window)
-        if existing_cache_count >= 3:
-            logger.debug(f"Cache limit reached: {existing_cache_count}/3 cache points")
-            # Remove the oldest cache point to make room for new one
-            if cache_point_positions:
-                oldest_msg_idx, oldest_block_idx = cache_point_positions[0]
-                oldest_msg = messages[oldest_msg_idx]
-                oldest_content = oldest_msg.get("content", [])
-                if isinstance(oldest_content, list) and oldest_block_idx < len(oldest_content):
-                    # Remove the cache point block
-                    del oldest_content[oldest_block_idx]
-                    oldest_msg["content"] = oldest_content
-                    existing_cache_count -= 1
-                    logger.debug(f"Removed oldest cache point at message {oldest_msg_idx} block {oldest_block_idx}")
-                    # Update positions for remaining cache points
-                    cache_point_positions.pop(0)
+            for block_idx, block in enumerate(content):
+                if isinstance(block, dict) and "cachePoint" in block:
+                    cache_point_positions.append((msg_idx, block_idx))
 
-        # Strategy: Prioritize assistant messages, then tool_result blocks
-        # This ensures every assistant turn gets cached, with or without tools
+        # Step 2: If no assistant message yet, nothing to cache
+        if last_assistant_idx is None:
+            logger.debug("No assistant message in conversation - skipping cache point")
+            return
 
-        assistant_candidates = []
-        tool_result_candidates = []
+        last_assistant_content = messages[last_assistant_idx].get("content", [])
+        if not isinstance(last_assistant_content, list) or len(last_assistant_content) == 0:
+            logger.debug("Last assistant message has no content - skipping cache point")
+            return
 
-        for msg_idx, msg in enumerate(messages):
-            msg_role = msg.get("role", "")
-            content = msg.get("content", [])
+        # Step 3: Check if cache point already exists at the end of last assistant message
+        last_block = last_assistant_content[-1]
+        if isinstance(last_block, dict) and "cachePoint" in last_block:
+            logger.debug("Cache point already exists at end of last assistant message")
+            return
 
-            if isinstance(content, list) and len(content) > 0:
-                # For assistant messages: cache after reasoning/response (priority)
-                if msg_role == "assistant":
-                    last_block = content[-1]
-                    has_cache = isinstance(last_block, dict) and "cachePoint" in last_block
-                    if not has_cache:
-                        assistant_candidates.append((msg_idx, len(content) - 1, "assistant"))
+        # Step 4: Remove ALL existing cache points (we only want 1 at the end)
+        # Process in reverse order to avoid index shifting issues
+        for msg_idx, block_idx in reversed(cache_point_positions):
+            msg_content = messages[msg_idx].get("content", [])
+            if isinstance(msg_content, list) and block_idx < len(msg_content):
+                del msg_content[block_idx]
+                logger.debug(f"Removed old cache point at msg {msg_idx} block {block_idx}")
 
-                # For user messages: cache after tool_result blocks (secondary)
-                elif msg_role == "user":
-                    for block_idx, block in enumerate(content):
-                        if isinstance(block, dict) and "toolResult" in block:
-                            has_cache = "cachePoint" in block
-                            if not has_cache:
-                                tool_result_candidates.append((msg_idx, block_idx, "tool_result"))
+        # Step 5: Add single cache point at the end of the last assistant message
+        cache_block = {"cachePoint": {"type": "default"}}
 
-        remaining_slots = 3 - existing_cache_count
-        logger.debug(f"Cache status: {existing_cache_count}/3 existing, {len(assistant_candidates)} assistant + {len(tool_result_candidates)} tool_result candidates, {remaining_slots} slots available")
-
-        # Prioritize assistant messages: take most recent assistants first, then tool_results
-        candidates_to_cache = []
-        if remaining_slots > 0:
-            # Take recent assistant messages first
-            num_assistants = min(len(assistant_candidates), remaining_slots)
-            if num_assistants > 0:
-                candidates_to_cache.extend(assistant_candidates[-num_assistants:])
-                remaining_slots -= num_assistants
-
-            # Fill remaining slots with tool_results
-            if remaining_slots > 0 and tool_result_candidates:
-                num_tool_results = min(len(tool_result_candidates), remaining_slots)
-                candidates_to_cache.extend(tool_result_candidates[-num_tool_results:])
-
-        if candidates_to_cache:
-
-            for msg_idx, block_idx, block_type in candidates_to_cache:
-                msg = messages[msg_idx]
-                content = msg.get("content", [])
-
-                # Safety check: content must be a list and not empty
-                if not isinstance(content, list):
-                    logger.warning(f"⚠️  Skipping cache point: content is not a list at message {msg_idx}")
-                    continue
-
-                if len(content) == 0:
-                    logger.warning(f"⚠️  Skipping cache point: content is empty at message {msg_idx}")
-                    continue
-
-                if block_idx >= len(content):
-                    logger.warning(f"⚠️  Skipping cache point: block_idx {block_idx} out of range at message {msg_idx}")
-                    continue
-
-                block = content[block_idx]
-
-                # For dict blocks (toolResult, text, etc.), add cachePoint as separate block after it
-                if isinstance(block, dict):
-                    # Safety: Don't insert cachePoint at the beginning of next message
-                    # Only insert within the same message's content array
-                    cache_block = {"cachePoint": {"type": "default"}}
-                    insert_position = block_idx + 1
-
-                    # Insert cache point after the current block
-                    content.insert(insert_position, cache_block)
-                    msg["content"] = content
-                    existing_cache_count += 1
-                    logger.debug(f"Added cache point after {block_type} at message {msg_idx} block {block_idx} (total: {existing_cache_count}/3)")
-
-                elif isinstance(block, str):
-                    # Convert string to structured format with cache
-                    msg["content"] = [
-                        {"text": block},
-                        {"cachePoint": {"type": "default"}}
-                    ]
-                    existing_cache_count += 1
-                    logger.debug(f"Added cache point after text at message {msg_idx} (total: {existing_cache_count}/3)")
-
-                if existing_cache_count >= 3:
-                    break
+        # Re-fetch content in case it was modified by deletion
+        last_assistant_content = messages[last_assistant_idx].get("content", [])
+        if isinstance(last_assistant_content, list):
+            last_assistant_content.append(cache_block)
+            logger.debug(f"Added cache point at end of assistant message {last_assistant_idx}")
 
 # Global stream processor instance
 _global_stream_processor = None
@@ -408,7 +347,7 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
         current_date = get_current_date_pacific()
 
         # Construct system prompt as string by combining all sections
-        # Note: Strands 1.14.0 uses string system prompts, cached via BedrockModel's cache_prompt="default"
+        # Note: System prompt caching is handled by ConversationCachingHook (single CP at end)
         prompt_sections = [base_system_prompt]
 
         # Add tool-specific guidance sections
@@ -469,12 +408,13 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
                 logger.warning("⚠️ No retrieval_config configured - LTM retrieval disabled")
 
             # Configure AgentCore Memory with dynamic retrieval config
+            # LTM retrieval disabled - set retrieval_config=None to skip retrieve_customer_context hook
             agentcore_memory_config = AgentCoreMemoryConfig(
                 memory_id=memory_id,
                 session_id=session_id,
                 actor_id=self.user_id,
                 enable_prompt_caching=caching_enabled if caching_enabled is not None else True,
-                retrieval_config=retrieval_config
+                retrieval_config=None
             )
 
             # Session Manager selection based on compaction_enabled flag
@@ -790,10 +730,11 @@ Your goal is to be helpful, accurate, and efficient in completing user requests 
                 "boto_client_config": retry_config
             }
 
-            # Add cache_prompt if caching is enabled (BedrockModel handles SystemContentBlock formatting)
-            if self.caching_enabled:
-                model_config["cache_prompt"] = "default"
-                logger.debug("✅ System prompt caching enabled (cache_prompt=default)")
+            # Note: We intentionally do NOT use cache_prompt="default" here.
+            # ConversationCachingHook adds a single cache point at the end which covers
+            # the entire conversation including system prompt. Adding a separate system
+            # prompt cache point would cause duplicate write premiums (25% extra cost)
+            # without any read benefit. Testing showed this costs ~21% more than needed.
 
             logger.debug("✅ Bedrock retry config: max_attempts=10, mode=adaptive")
             model = BedrockModel(**model_config)
