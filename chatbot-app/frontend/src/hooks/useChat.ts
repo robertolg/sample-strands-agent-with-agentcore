@@ -40,6 +40,7 @@ interface UseChatReturn {
   onGatewayToolsChange: (enabledToolIds: string[]) => void
   browserSession: { sessionId: string | null; browserId: string | null } | null
   browserProgress?: Array<{ stepNumber: number; content: string }>
+  researchProgress?: { stepNumber: number; content: string }
   respondToInterrupt: (interruptId: string, response: string) => Promise<void>
   currentInterrupt: InterruptState | null
 }
@@ -256,6 +257,8 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
       streaming: null,
       toolExecutions: [],
       browserSession: null,
+      browserProgress: undefined,
+      researchProgress: undefined,
       interrupt: null
     })
 
@@ -436,6 +439,8 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
         streaming: null,
         toolExecutions: [],
         browserSession: null,
+        browserProgress: undefined,
+        researchProgress: undefined,
         interrupt: null
       })
       setUIState(prev => ({ ...prev, isTyping: false, agentStatus: 'idle' }))
@@ -520,7 +525,8 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
       ...prev,
       reasoning: null,
       streaming: null,
-      toolExecutions: []
+      toolExecutions: [],
+      researchProgress: undefined
     }))
     currentToolExecutionsRef.current = []
 
@@ -538,6 +544,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
           toolExecutions: [],
           browserSession: prev.browserSession,
           browserProgress: undefined,
+          researchProgress: undefined,
           interrupt: null
         }))
       }
@@ -627,6 +634,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     onGatewayToolsChange: handleGatewayToolsChange,
     browserSession: sessionState.browserSession,
     browserProgress: sessionState.browserProgress,
+    researchProgress: sessionState.researchProgress,
     respondToInterrupt,
     currentInterrupt: sessionState.interrupt,
   }

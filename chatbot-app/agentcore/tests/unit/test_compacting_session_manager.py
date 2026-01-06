@@ -39,8 +39,8 @@ class TestCompactingSessionManagerInit:
             region_name='us-west-2'
         )
 
-        # Token-based compaction threshold (default: 50K)
-        assert manager.token_threshold == 50_000
+        # Token-based compaction threshold (default: 100K)
+        assert manager.token_threshold == 100_000
         # Turn management (default: 2 protected turns)
         assert manager.protected_turns == 2
         # Tool content limit

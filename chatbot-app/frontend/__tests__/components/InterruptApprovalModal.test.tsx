@@ -207,20 +207,6 @@ describe('InterruptApprovalModal', () => {
       expect(screen.getByText('Browser Task')).toBeInTheDocument()
     })
 
-    it('should display max_steps information', () => {
-      render(
-        <InterruptApprovalModal
-          isOpen={true}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          interrupts={browserInterrupts}
-        />
-      )
-
-      expect(screen.getByText('Maximum steps:')).toBeInTheDocument()
-      expect(screen.getByText('20')).toBeInTheDocument()
-    })
-
     it('should have "Approve & Start Browser Task" button text', () => {
       render(
         <InterruptApprovalModal
@@ -234,28 +220,6 @@ describe('InterruptApprovalModal', () => {
       expect(screen.getByText('Approve & Start Browser Task')).toBeInTheDocument()
     })
 
-    it('should use default max_steps of 15 when not provided', () => {
-      const interruptsWithoutMaxSteps = [
-        {
-          id: 'interrupt_003',
-          name: 'chatbot-browser-approval',
-          reason: {
-            task: 'Simple browser task',
-          },
-        },
-      ]
-
-      render(
-        <InterruptApprovalModal
-          isOpen={true}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          interrupts={interruptsWithoutMaxSteps}
-        />
-      )
-
-      expect(screen.getByText('15')).toBeInTheDocument()
-    })
   })
 
   // ============================================================

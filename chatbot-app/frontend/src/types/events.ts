@@ -103,6 +103,12 @@ export interface BrowserProgressEvent {
   stepNumber: number;
 }
 
+export interface ResearchProgressEvent {
+  type: 'research_progress';
+  content: string;
+  stepNumber: number;
+}
+
 export type StreamEvent =
   | ReasoningEvent
   | ResponseEvent
@@ -115,7 +121,8 @@ export type StreamEvent =
   | InterruptEvent
   | ProgressEvent
   | MetadataEvent
-  | BrowserProgressEvent;
+  | BrowserProgressEvent
+  | ResearchProgressEvent;
 
 // Chat state interfaces
 export interface ReasoningState {
@@ -152,6 +159,10 @@ export interface ChatSessionState {
     stepNumber: number;
     content: string;
   }>;
+  researchProgress?: {
+    stepNumber: number;
+    content: string;
+  };
   interrupt: InterruptState | null;
 }
 

@@ -1,7 +1,7 @@
-import React from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
-import { Bot, User, FileText, Image } from 'lucide-react'
+import { Bot, User, FileText, Image, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react'
 import { Message } from '@/types/chat'
 import { Markdown } from '@/components/ui/Markdown'
 import { ToolExecutionContainer } from './ToolExecutionContainer'
@@ -12,19 +12,71 @@ interface ChatMessageProps {
   sessionId?: string
 }
 
-  const getFileIcon = (fileType: string) => {
-    if (fileType.startsWith('image/')) {
-      return <Image className="w-3 h-3" />
-    } else if (fileType === 'application/pdf') {
-      return <FileText className="w-3 h-3" />
-    }
+const MAX_LINES = 5
+
+const getFileIcon = (fileType: string) => {
+  if (fileType.startsWith('image/')) {
+    return <Image className="w-3 h-3" />
+  } else if (fileType === 'application/pdf') {
     return <FileText className="w-3 h-3" />
   }
+  return <FileText className="w-3 h-3" />
+}
+
+const CollapsibleUserMessage = ({ text }: { text: string }) => {
+  const [isExpanded, setIsExpanded] = useState(false)
+
+  const { lines, isLong, truncatedText } = useMemo(() => {
+    const allLines = text.split('\n')
+    const isLong = allLines.length > MAX_LINES
+    const truncatedText = isLong ? allLines.slice(0, MAX_LINES).join('\n') : text
+    return { lines: allLines, isLong, truncatedText }
+  }, [text])
+
+  const textClass = "text-[13px] leading-relaxed font-[450] tracking-[-0.005em] whitespace-pre-wrap break-all"
+
+  if (!isLong) {
+    return <p className={textClass}>{text}</p>
+  }
+
+  return (
+    <div>
+      <p className={textClass}>
+        {isExpanded ? text : truncatedText}
+        {!isExpanded && '...'}
+      </p>
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="mt-2 flex items-center gap-1 text-[11px] text-blue-200 hover:text-white transition-colors"
+      >
+        {isExpanded ? (
+          <>
+            <ChevronUp className="w-3 h-3" />
+            Show less
+          </>
+        ) : (
+          <>
+            <ChevronDown className="w-3 h-3" />
+            Show more ({lines.length - MAX_LINES} lines)
+          </>
+        )}
+      </button>
+    </div>
+  )
+}
 
 export const ChatMessage = React.memo<ChatMessageProps>(({ message, sessionId }) => {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = useCallback(async () => {
+    await navigator.clipboard.writeText(message.text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }, [message.text])
+
   if (message.sender === 'user') {
     return (
-      <div className="flex justify-end mb-8 animate-slide-in">
+      <div className="flex justify-end mb-8 animate-slide-in group">
         <div className="flex items-start space-x-4 max-w-2xl">
           <div className="flex flex-col items-end space-y-2">
             {/* Uploaded files display */}
@@ -40,8 +92,17 @@ export const ChatMessage = React.memo<ChatMessageProps>(({ message, sessionId })
                 ))}
               </div>
             )}
-            <div className="bg-blue-600 text-white rounded-2xl rounded-tr-md px-5 py-3.5 shadow-sm">
-              <p className="text-[13px] leading-relaxed font-[450] tracking-[-0.005em]">{message.text}</p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCopy}
+                className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md hover:bg-slate-200 text-slate-400 hover:text-slate-600"
+                title="Copy message"
+              >
+                {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+              </button>
+              <div className="bg-blue-600 text-white rounded-2xl rounded-tr-md px-5 py-3.5 shadow-sm">
+                <CollapsibleUserMessage text={message.text} />
+              </div>
             </div>
           </div>
           <Avatar className="h-9 w-9 flex-shrink-0 mt-1">

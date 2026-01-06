@@ -115,7 +115,10 @@ export const useStreamEvents = ({
         textBuffer.appendChunk(data.text)
 
         setUIState(prevUI => {
-          if (prevUI.agentStatus === 'stopping') {
+          // Don't change status if stopping or in A2A agent mode
+          if (prevUI.agentStatus === 'stopping' ||
+              prevUI.agentStatus === 'researching' ||
+              prevUI.agentStatus === 'browser_automation') {
             return prevUI
           }
           if (prevUI.agentStatus === 'thinking') {
@@ -253,6 +256,17 @@ export const useStreamEvents = ({
       const toolExecution = currentToolExecutionsRef.current.find(tool => tool.id === data.toolUseId)
       const toolName = toolExecution?.toolName
 
+      // If A2A tool completed, transition from researching/browser_automation to thinking
+      // This allows subsequent response events to properly transition to 'responding'
+      if (toolName && isA2ATool(toolName)) {
+        setUIState(prev => {
+          if (prev.agentStatus === 'researching' || prev.agentStatus === 'browser_automation') {
+            return { ...prev, agentStatus: 'thinking' }
+          }
+          return prev
+        })
+      }
+
       // Update tool execution with result
       const isCancelled = data.status === 'error'
       const updatedExecutions = currentToolExecutionsRef.current.map(tool =>
@@ -327,7 +341,7 @@ export const useStreamEvents = ({
         return msg
       }))
     }
-  }, [currentToolExecutionsRef, sessionState, setSessionState, setMessages])
+  }, [currentToolExecutionsRef, sessionState, setSessionState, setMessages, setUIState])
 
   const handleCompleteEvent = useCallback(async (data: StreamEvent) => {
     if (data.type === 'complete') {
@@ -372,6 +386,7 @@ export const useStreamEvents = ({
             ),
             browserSession: prev.browserSession,
             browserProgress: undefined,
+            researchProgress: undefined,
             interrupt: null
           }))
         })
@@ -511,6 +526,7 @@ export const useStreamEvents = ({
         toolExecutions: [],
         browserSession: prev.browserSession,
         browserProgress: undefined,
+        researchProgress: undefined,
         interrupt: null
       }))
 
@@ -568,6 +584,7 @@ export const useStreamEvents = ({
         toolExecutions: [],
         browserSession: prev.browserSession,  // Preserve browser session on error
         browserProgress: undefined,  // Clear browser progress on error
+        researchProgress: undefined,  // Clear research progress on error
         interrupt: null
       }))
 
@@ -613,6 +630,19 @@ export const useStreamEvents = ({
     }
   }, [setSessionState])
 
+  const handleResearchProgressEvent = useCallback((event: StreamEvent) => {
+    if (event.type === 'research_progress') {
+      // Update research progress in sessionState (replace previous status)
+      setSessionState(prev => ({
+        ...prev,
+        researchProgress: {
+          stepNumber: event.stepNumber,
+          content: event.content
+        }
+      }))
+    }
+  }, [setSessionState])
+
   const handleStreamEvent = useCallback((event: StreamEvent) => {
     switch (event.type) {
       case 'reasoning':
@@ -645,6 +675,9 @@ export const useStreamEvents = ({
         break
       case 'browser_progress':
         handleBrowserProgressEvent(event)
+        break
+      case 'research_progress':
+        handleResearchProgressEvent(event)
         break
       case 'metadata':
         // Handle metadata updates (e.g., browser session during tool execution)
@@ -685,6 +718,7 @@ export const useStreamEvents = ({
     handleErrorEvent,
     handleInterruptEvent,
     handleBrowserProgressEvent,
+    handleResearchProgressEvent,
     setSessionState
   ])
 

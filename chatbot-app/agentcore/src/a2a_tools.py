@@ -309,10 +309,10 @@ async def send_a2a_message(
                     if hasattr(task, 'artifacts') and task.artifacts:
                         # Always check artifacts for new browser_session_arn or browser_id
                         # (they may arrive in separate streaming events)
-                        logger.info(f"🔴 [Live View] Checking {len(task.artifacts)} artifacts")
+                        logger.debug(f"[A2A] Checking {len(task.artifacts)} artifacts")
                         for artifact in task.artifacts:
                             artifact_name = artifact.name if hasattr(artifact, 'name') else 'unnamed'
-                            logger.info(f"🔴 [Live View] Found artifact: {artifact_name}")
+                            logger.debug(f"[A2A] Found artifact: {artifact_name}")
 
                             # Extract browser_session_arn (if not yet extracted)
                             if artifact_name == 'browser_session_arn' and not browser_session_arn:
@@ -418,14 +418,16 @@ async def send_a2a_message(
 
                                             break
 
-                        # Check for browser_step_N artifacts (real-time step streaming)
+                        # Check for browser_step_N or research_step_N artifacts (real-time step streaming)
                         # This runs EVERY iteration, not just when extracting browser_session_arn
                         for artifact in task.artifacts:
                             artifact_name = artifact.name if hasattr(artifact, 'name') else 'unnamed'
 
-                            if artifact_name.startswith('browser_step_'):
+                            # Handle both browser_step_N and research_step_N artifacts
+                            if artifact_name.startswith('browser_step_') or artifact_name.startswith('research_step_'):
                                 try:
                                     step_number = int(artifact_name.split('_')[-1])
+                                    step_type = "browser_step" if artifact_name.startswith('browser_step_') else "research_step"
 
                                     # Only send new steps (avoid duplicates)
                                     if step_number not in sent_browser_steps:
@@ -441,14 +443,14 @@ async def send_a2a_message(
                                                     break
 
                                         if step_text:
-                                            # Yield browser step event for real-time streaming
+                                            # Yield step event for real-time streaming
                                             yield {
-                                                "type": "browser_step",
+                                                "type": step_type,
                                                 "stepNumber": step_number,
                                                 "content": step_text
                                             }
                                             sent_browser_steps.add(step_number)
-                                            logger.info(f"🔴 [Browser Step] Yielded browser_step_{step_number}")
+                                            logger.info(f"🔴 [{step_type}] Yielded {artifact_name}")
                                 except (ValueError, IndexError):
                                     # Invalid step number format, skip
                                     pass
@@ -675,7 +677,8 @@ def create_a2a_tool(agent_id: str):
 
     else:
         # Research Agent (default) - plan parameter
-        async def tool_impl(plan: str, tool_context: ToolContext = None) -> str:
+        # Uses async generator to stream research_step events for real-time status updates
+        async def tool_impl(plan: str, tool_context: ToolContext = None) -> AsyncGenerator[Dict[str, Any], None]:
             session_id, user_id, model_id = extract_context(tool_context)
 
             # Prepare metadata
@@ -689,22 +692,10 @@ def create_a2a_tool(agent_id: str):
 
             logger.info(f"[{agent_id}] Sending to A2A with metadata: {metadata}")
 
-            # Consume async generator and get final result
-            final_result = None
+            # Stream events from A2A agent (including research_step events for real-time UI updates)
             async for event in send_a2a_message(agent_id, plan, session_id, region, metadata=metadata):
-                final_result = event  # Keep updating to get the last event
-
-            if final_result is None:
-                return "No response from research agent"
-
-            # Extract text from A2A format: {"status": "success", "content": [{"text": "..."}]}
-            if isinstance(final_result, dict) and 'content' in final_result:
-                content = final_result['content']
-                if isinstance(content, list) and content and 'text' in content[0]:
-                    return content[0]['text']
-
-            # If not in expected format, return as-is
-            return final_result
+                # Yield all events to allow real-time streaming (research_step, etc.)
+                yield event
 
         # Set correct function name and docstring BEFORE decorating
         tool_impl.__name__ = correct_name

@@ -103,6 +103,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     onGatewayToolsChange,
     browserSession,
     browserProgress,
+    researchProgress,
     respondToInterrupt,
     currentInterrupt,
   } = useChat()
@@ -737,6 +738,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                   sessionId={stableSessionId}
                   onResearchClick={handleResearchClick}
                   onBrowserClick={handleBrowserClick}
+                  researchProgress={researchProgress}
                 />
               )}
             </div>

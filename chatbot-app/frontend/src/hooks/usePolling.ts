@@ -98,14 +98,15 @@ export const usePolling = ({
   }, [loadSession, stopPolling, onPollComplete])
 
   /**
-   * Check if there are ongoing A2A tools and start polling if needed.
-   * Only starts polling for research_agent and browser_use_agent.
+   * Check if there are ongoing A2A tools and start/stop polling accordingly.
+   * Only polls for research_agent and browser_use_agent.
    */
   const checkAndStartPollingForA2ATools = useCallback((messages: Message[], targetSessionId: string) => {
     const hasOngoingA2ATools = messages.some(msg =>
       msg.toolExecutions &&
       msg.toolExecutions.some(te =>
         !te.isComplete &&
+        !te.isCancelled &&
         A2A_TOOLS_REQUIRING_POLLING.includes(te.toolName as typeof A2A_TOOLS_REQUIRING_POLLING[number])
       )
     )
@@ -113,8 +114,11 @@ export const usePolling = ({
     if (hasOngoingA2ATools && !isPollingActiveRef.current) {
       console.log('[usePolling] Detected ongoing A2A agent executions, starting polling')
       startPolling(targetSessionId)
+    } else if (!hasOngoingA2ATools && isPollingActiveRef.current) {
+      console.log('[usePolling] No ongoing A2A agent executions, stopping polling')
+      stopPolling()
     }
-  }, [startPolling])
+  }, [startPolling, stopPolling])
 
   // Cleanup on unmount
   useEffect(() => {

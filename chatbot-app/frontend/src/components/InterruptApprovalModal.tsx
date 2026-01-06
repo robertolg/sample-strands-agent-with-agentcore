@@ -80,13 +80,6 @@ export function InterruptApprovalModal({
                 {isBrowserApproval ? task : plan}
               </pre>
             </div>
-            {isBrowserApproval && (
-              <div className="mt-3 pt-3 border-t border-muted-foreground/10">
-                <p className="text-xs text-muted-foreground">
-                  Maximum steps: <span className="font-medium text-foreground">{maxSteps}</span>
-                </p>
-              </div>
-            )}
           </div>
         </div>
 

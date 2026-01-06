@@ -62,6 +62,17 @@ class MetadataAwareExecutor(StrandsA2AExecutor):
     from RequestContext and passes to agent's invocation_state.
     """
 
+    # Tool name to user-friendly status mapping
+    TOOL_STATUS_MAP = {
+        "ddg_web_search": "Searching web sources",
+        "fetch_url_content": "Fetching article content",
+        "wikipedia_search": "Searching Wikipedia",
+        "wikipedia_get_article": "Reading Wikipedia article",
+        "write_markdown_section": "Writing report section",
+        "read_markdown_file": "Reading report",
+        "generate_chart_tool": "Generating chart",
+    }
+
     def __init__(self, agent_cache: dict):
         """
         Initialize with agent cache instead of single agent.
@@ -71,11 +82,81 @@ class MetadataAwareExecutor(StrandsA2AExecutor):
         """
         # Don't call super().__init__() since we'll override agent selection
         self.agent_cache = agent_cache
+        self._current_tool_use_id = None  # Track current tool to avoid duplicate updates
+        self._step_counter = 0  # Counter for step artifacts
+
+    async def _handle_streaming_event(self, event: dict, updater: TaskUpdater) -> None:
+        """
+        Override to stream tool execution status in real-time.
+
+        Handles these event types:
+        - current_tool_use: When a tool starts executing (type: tool_use_stream)
+        - tool_result: When a tool completes
+        - data: Text content being generated (thinking)
+        - result: Final agent result
+        """
+        # Debug: log ALL events to understand structure
+        event_type = event.get("type", "unknown")
+        event_keys = list(event.keys())
+        logger.info(f"[MetadataAwareExecutor] Event - type: {event_type}, keys: {event_keys}")
+
+        # Handle tool use start - stream status when tool begins
+        # Check both direct key and type-based detection
+        if "current_tool_use" in event or event_type == "tool_use_stream":
+            tool_use = event.get("current_tool_use", {})
+            tool_use_id = tool_use.get("toolUseId")
+            tool_name = tool_use.get("name", "")
+
+            # Only send update if this is a new tool (avoid duplicates from streaming chunks)
+            if tool_use_id and tool_use_id != self._current_tool_use_id:
+                self._current_tool_use_id = tool_use_id
+                self._step_counter += 1
+
+                # Get user-friendly status message
+                status_message = self.TOOL_STATUS_MAP.get(tool_name, f"Running {tool_name}")
+
+                # Extract query/input for context
+                tool_input = tool_use.get("input", {})
+                context_info = ""
+                if isinstance(tool_input, dict):
+                    if "query" in tool_input:
+                        context_info = f": {tool_input['query'][:80]}..."
+                    elif "heading" in tool_input:
+                        context_info = f": {tool_input['heading']}"
+                    elif "url" in tool_input:
+                        context_info = f": {tool_input['url'][:60]}..."
+
+                step_text = f"🔍 {status_message}{context_info}"
+
+                await updater.add_artifact(
+                    parts=[Part(root=TextPart(text=step_text))],
+                    name=f"research_step_{self._step_counter}"
+                )
+                logger.info(f"[MetadataAwareExecutor] Streamed step {self._step_counter}: {status_message}")
+
+        # Handle tool result - could add completion status here if needed
+        elif event.get("type") == "tool_result":
+            # Tool completed - reset current tool tracking
+            self._current_tool_use_id = None
+
+        # Handle text data (thinking/response generation)
+        elif "data" in event:
+            # For now, we don't stream thinking text to avoid too much noise
+            # But we could add a "Thinking..." status here if no tool is active
+            pass
+
+        # Handle final result
+        elif "result" in event:
+            await self._handle_agent_result(event["result"], updater)
 
     async def _execute_streaming(self, context: RequestContext, updater: TaskUpdater) -> None:
         """
         Override to inject metadata into invocation_state and use appropriate model.
         """
+        # Reset step tracking for new request
+        self._current_tool_use_id = None
+        self._step_counter = 0
+
         # Extract metadata from RequestContext
         # Try both params.metadata (MessageSendParams) and message.metadata (Message)
         # Streaming client may put metadata in Message.metadata

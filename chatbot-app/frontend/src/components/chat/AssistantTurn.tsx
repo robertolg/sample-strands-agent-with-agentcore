@@ -23,9 +23,13 @@ interface AssistantTurnProps {
   sessionId?: string
   onResearchClick?: (executionId: string) => void
   onBrowserClick?: (executionId: string) => void
+  researchProgress?: {
+    stepNumber: number
+    content: string
+  }
 }
 
-export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, currentReasoning, availableTools = [], sessionId, onResearchClick, onBrowserClick }) => {
+export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, currentReasoning, availableTools = [], sessionId, onResearchClick, onBrowserClick, researchProgress }) => {
   // Get initial feedback state from first message
   const initialFeedback = messages[0]?.feedback || null
 
@@ -348,6 +352,7 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
                         return !(resultText === 'user declined to proceed with research' ||
                                 resultText === 'user declined to proceed with browser automation')
                       })()}
+                      currentStatus={researchProgress?.content}
                       onClick={() => {
                         if (!onResearchClick || !researchExecution.toolResult) return
 
@@ -664,5 +669,9 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
   const reasoningEqual = prevProps.currentReasoning?.text === nextProps.currentReasoning?.text
   const callbackEqual = prevProps.onResearchClick === nextProps.onResearchClick && prevProps.onBrowserClick === nextProps.onBrowserClick
 
-  return messagesEqual && reasoningEqual && prevProps.sessionId === nextProps.sessionId && callbackEqual
+  // Compare researchProgress for real-time status updates
+  const researchProgressEqual = prevProps.researchProgress?.stepNumber === nextProps.researchProgress?.stepNumber &&
+    prevProps.researchProgress?.content === nextProps.researchProgress?.content
+
+  return messagesEqual && reasoningEqual && prevProps.sessionId === nextProps.sessionId && callbackEqual && researchProgressEqual
 })

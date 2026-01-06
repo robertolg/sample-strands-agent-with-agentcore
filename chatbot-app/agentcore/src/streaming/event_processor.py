@@ -323,10 +323,13 @@ class StreamEventProcessor:
                         self.invocation_state['_browser_session_emitted'] = True
                         import logging as _logging
                         _logger = _logging.getLogger(__name__)
-                        _logger.info(f"🔴 [Live View] Emitting browser session from invocation_state: {browser_session_arn}")
-                        yield self.formatter.create_metadata_event({
-                            "browserSessionId": browser_session_arn
-                        })
+                        # Include browserId if available (required for session validation)
+                        browser_id = self.invocation_state.get('browser_id')
+                        _logger.info(f"🔴 [Live View] Emitting browser session from invocation_state: {browser_session_arn}, browserId: {browser_id}")
+                        metadata = {"browserSessionId": browser_session_arn}
+                        if browser_id:
+                            metadata["browserId"] = browser_id
+                        yield self.formatter.create_metadata_event(metadata)
 
                 # Handle final result
                 if "result" in event:
@@ -575,6 +578,16 @@ class StreamEventProcessor:
                             logger.debug(f"[Browser Step] Streaming browser_step_{step_number} to frontend")
                             # Send as browser_progress event (NOT response) to display in Browser Modal
                             yield self.formatter.create_browser_progress_event(step_content, step_number)
+
+                    # Check if this is research step event (real-time progress)
+                    elif isinstance(stream_data, dict) and stream_data.get("type") == "research_step":
+                        step_content = stream_data.get("content", "")
+                        step_number = stream_data.get("stepNumber", 0)
+
+                        if step_content:
+                            logger.info(f"[Research Step] ✅ Streaming research_step_{step_number} to frontend: {step_content[:50]}...")
+                            # Send as research_progress event to display in Research Agent card
+                            yield self.formatter.create_research_progress_event(step_content, step_number)
 
                     else:
                         # Other tool stream events (e.g., progress)

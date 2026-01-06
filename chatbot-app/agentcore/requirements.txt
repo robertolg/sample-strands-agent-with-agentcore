@@ -35,3 +35,7 @@ bedrock-agentcore==1.1.1
 # Nova Act includes playwright as a dependency, so no need to install it separately
 # v3.0+ supports model_id parameter for model selection (nova-act-latest, nova-act-preview, nova-act-v1.0)
 nova-act>=3.0.0
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0

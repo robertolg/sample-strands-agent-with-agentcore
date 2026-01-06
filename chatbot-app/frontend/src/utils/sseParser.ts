@@ -174,6 +174,15 @@ export function validateStreamEvent(event: StreamEvent): { valid: boolean; error
       }
       break
 
+    case 'research_progress':
+      if (typeof event.stepNumber !== 'number') {
+        errors.push('research_progress event missing "stepNumber" field')
+      }
+      if (typeof event.content !== 'string') {
+        errors.push('research_progress event missing "content" field')
+      }
+      break
+
     case 'init':
     case 'thinking':
     case 'progress':
@@ -207,7 +216,8 @@ export function createMockEvent<T extends StreamEvent['type']>(
     interrupt: { type: 'interrupt', interrupts: [] },
     progress: { type: 'progress' },
     metadata: { type: 'metadata' },
-    browser_progress: { type: 'browser_progress', content: '', stepNumber: 0 }
+    browser_progress: { type: 'browser_progress', content: '', stepNumber: 0 },
+    research_progress: { type: 'research_progress', content: '', stepNumber: 0 }
   }
 
   return { ...defaults[type], ...overrides } as Extract<StreamEvent, { type: T }>

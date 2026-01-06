@@ -11,6 +11,7 @@ interface ResearchContainerProps {
   hasResult?: boolean
   onClick: () => void
   agentName?: string  // Display name for the agent (e.g., "Research Agent" or "Browser Use Agent")
+  currentStatus?: string  // Real-time status from research_progress events
 }
 
 export function ResearchContainer({
@@ -19,9 +20,15 @@ export function ResearchContainer({
   isLoading,
   hasResult = true,
   onClick,
-  agentName = 'Research Agent'
+  agentName = 'Research Agent',
+  currentStatus
 }: ResearchContainerProps) {
   const getStatusText = () => {
+    // Use real-time status if available and still loading
+    if (currentStatus && isLoading && status !== 'complete') {
+      return currentStatus
+    }
+
     switch (status) {
       case 'searching':
         return 'Searching web sources'

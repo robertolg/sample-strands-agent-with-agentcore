@@ -411,6 +411,15 @@ class StreamEventFormatter:
         })
 
     @staticmethod
+    def create_research_progress_event(content: str, step_number: int) -> str:
+        """Create research progress event for real-time step updates in Research Agent card"""
+        return StreamEventFormatter.format_sse_event({
+            "type": "research_progress",
+            "content": content,
+            "stepNumber": step_number
+        })
+
+    @staticmethod
     def _extract_images_from_json_response(response_data):
         """Extract images from any JSON tool response automatically"""
         images = []

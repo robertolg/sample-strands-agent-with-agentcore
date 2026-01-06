@@ -211,7 +211,7 @@ def get_or_create_llm(model_id: str) -> PatchedChatAWSBedrock:
         llm_instance = PatchedChatAWSBedrock(
             model=model_id,
             aws_region=AWS_REGION,
-            temperature=0.3,  # Lower temperature for more consistent structured output
+            temperature=0.1,  # Very low temperature for consistent tool_use structured output
             max_tokens=8192,
             session=boto_session,  # Pass boto3 session explicitly
         )
@@ -604,12 +604,18 @@ TASK:
             logger.info(f"Connecting to AgentCore Browser via CDP: {ws_url}")
 
             # Create browser profile with headers for authentication
+            # Optimized settings for CDP connection stability with AgentCore Browser
             browser_profile = BrowserProfile(
                 headers=headers,
                 timeout=1500000,  # 1500 seconds (25 minutes) timeout for long-running tasks
                 cross_origin_iframes=False,  # Disable cross-origin iframes (blocks most ads)
                 max_iframes=5,  # Aggressive limit: only process first 5 same-origin iframes
                 max_iframe_depth=3,  # Reduce nested iframe depth (default: 5)
+                # CDP stability optimizations
+                minimum_wait_page_load_time=1.0,  # Wait longer for SPA pages to load
+                wait_for_network_idle_page_load_time=2.0,  # Wait for network idle (heavy SPAs like Amazon)
+                wait_between_actions=1.0,  # Reduce CDP pressure between actions
+                highlight_elements=False,  # Disable element highlighting to reduce CDP calls
             )
 
             # Create browser session with CDP URL
@@ -626,7 +632,8 @@ TASK:
             screenshot_tools = create_screenshot_tools()
 
             # Create browser-use agent (SINGLE LLM LAYER!)
-            logger.info(f"Starting browser-use agent with model {model_id}")
+            # flash_mode=True for 3-5x faster execution (skips evaluation, next_goal, thinking)
+            logger.info(f"Starting browser-use agent with model {model_id} in flash_mode")
             agent = BrowserUseAgent(
                 task=wrapped_task,  # Use wrapped task with screenshot requirements
                 llm=llm,
@@ -636,6 +643,9 @@ TASK:
                 llm_screenshot_size=(1536, 1296),  # Match viewport to avoid scaling overhead
                 use_vision='auto',  # Enable vision mode to allow screenshot action
                 use_judge=False,  # Disable Judge - rely on agent's own completion signal
+                # Performance optimizations
+                flash_mode=True,  # Fast mode: skip evaluation/next_goal/thinking for 3-5x speed
+                max_failures=4,  # Slight increase for CDP connection errors (default: 3)
             )
 
             # Set global variables for custom action access

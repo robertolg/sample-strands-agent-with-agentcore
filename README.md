@@ -212,7 +212,7 @@ Users can enable/disable specific tools via UI sidebar, and the agent dynamicall
 
 **5. Token Optimization via Prompt Caching**
 
-Implements hooks-based caching strategy with system prompt caching and dynamic conversation history caching (last 2 messages), using rotating cache points (max 4 total) to significantly reduce input token costs across repeated API calls.
+Implements hooks-based caching strategy with system prompt and conversation history caching to reduce input token costs. See [detailed blog post](https://medium.com/@revoir07/agent-loop-caching-the-missing-optimization-for-agent-workflows-230cc530eb72) for implementation details.
 
 **6. Multimodal Input/Output**
 
@@ -222,7 +222,7 @@ Native support for visual and document content:
 
 **7. Two-tier Memory System**
 
-Combines session-based conversation history (short-term) with namespaced user preferences and facts (long-term) stored in AgentCore Memory, enabling cross-session context retention with relevance-scored retrieval per user.
+Uses AgentCore Memory for session-based conversation history (short-term) and summarization (long-term). Implements [compaction algorithm](https://medium.com/@revoir07/long-context-compaction-for-ai-agents-part-1-design-principles-2bf4a5748154) for context retention in long conversations.
 
 **8. Multi-agent Architecture**
 
@@ -317,34 +317,7 @@ agent = Agent(
 
 ### Token Optimization: Prompt Caching
 
-**Implementation:** `agent.py:166-313`
-
-Two-level caching via Strands hooks:
-
-1. **System Prompt Caching** (static)
-   ```python
-   system_content = [
-       {"text": system_prompt},
-       {"cachePoint": {"type": "default"}}  # Cache marker
-   ]
-   ```
-
-2. **Conversation History Caching** (dynamic)
-   - `ConversationCachingHook` adds cache points to last 2 messages
-   - Removes cache points from previous messages
-   - Executes on `BeforeModelCallEvent`
-
-**Cache Strategy:**
-- Max 4 cache points: system (1-2) + last 2 messages (2)
-- Cache points rotate as conversation progresses
-- Reduces input tokens for repeated content
-
-<img src="docs/images/prompt-caching.svg" alt="Prompt Caching Strategy" width="800">
-
-**Visual Explanation:**
-- 🟧 **Orange**: Cache creation (new content cached)
-- 🟦 **Blue**: Cache read (reusing cached content)
-- Event1 creates initial cache, Event2+ reuses and extends cached context
+Implements prompt caching via Strands hooks. See [blog post](https://medium.com/@revoir07/agent-loop-caching-the-missing-optimization-for-agent-workflows-230cc530eb72) for details.
 
 ## Quick Start
 
