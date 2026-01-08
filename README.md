@@ -233,12 +233,8 @@ This sample demonstrates a **Supervisor–Worker multi-agent pattern** using the
      alt="Multi-agent Architecture"
      width="900">
 
-### Key Components
-
-- **Supervisor Agent** – Plans tasks, requests user approval, delegates work  
-- **Research Agent (A2A)** – Autonomous research with structured reports  
-- **Human-in-the-Loop** – Implemented via Strands Interrupts  
-- **A2A Protocol** – Secure runtime-to-runtime collaboration (SigV4)
+Design notes:
+- https://medium.com/@revoir07/extend-your-chatbot-with-deep-research-using-a2a-ba4de3ed23e9
 
 ---
 
@@ -276,7 +272,7 @@ The system uses **AgentCore Memory** with:
 Long conversations are compacted using a context summarization strategy to
 retain key information while controlling token growth.
 
-Related design notes:
+Design notes:
 - https://medium.com/@revoir07/long-context-compaction-for-ai-agents-part-1-design-principles-2bf4a5748154
 
 ---
@@ -290,7 +286,7 @@ Prompt caching is implemented via Strands hooks to reuse:
 
 This reduces input token usage while preserving agent behavior.
 
-Related article:
+Design notes:
 - https://medium.com/@revoir07/agent-loop-caching-the-missing-optimization-for-agent-workflows-230cc530eb72
 
 ---
