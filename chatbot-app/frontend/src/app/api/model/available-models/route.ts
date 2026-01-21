@@ -9,6 +9,12 @@ export const runtime = 'nodejs'
 const AVAILABLE_MODELS = [
   // Claude (Anthropic)
   {
+    id: 'us.anthropic.claude-opus-4-5-20251101-v1:0',
+    name: 'Claude Opus 4.5',
+    provider: 'Anthropic',
+    description: 'Most intelligent model, best for complex tasks'
+  },
+  {
     id: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
     name: 'Claude Sonnet 4.5',
     provider: 'Anthropic',
