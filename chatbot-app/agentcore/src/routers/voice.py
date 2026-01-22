@@ -36,6 +36,28 @@ router = APIRouter()
 _active_sessions: dict = {}
 
 
+def _get_param_from_request(websocket: WebSocket, header_suffix: str, query_param: Optional[str]) -> Optional[str]:
+    """Extract param from custom header (cloud) or query param (local)."""
+    # Cloud mode: AgentCore Runtime converts X-Amzn-Bedrock-AgentCore-Runtime-Custom-* to headers
+    header_name = f"x-amzn-bedrock-agentcore-runtime-custom-{header_suffix}"
+    custom_header = websocket.headers.get(header_name)
+    if custom_header:
+        return custom_header
+    return query_param
+
+
+def _get_enabled_tools_from_request(websocket: WebSocket, query_param: Optional[str]) -> List[str]:
+    """Extract enabled_tools from custom header (cloud) or query param (local)."""
+    tools_json = _get_param_from_request(websocket, "enabled-tools", query_param)
+    if not tools_json:
+        return []
+    try:
+        return json.loads(tools_json)
+    except json.JSONDecodeError as e:
+        logger.warning(f"[Voice] Failed to parse enabled_tools: {e}")
+        return []
+
+
 @router.websocket("/voice/stream")
 async def voice_stream(
     websocket: WebSocket,
@@ -43,33 +65,31 @@ async def voice_stream(
     user_id: Optional[str] = Query(None, description="User ID (from BFF)"),
     enabled_tools: Optional[str] = Query(None, description="JSON array of enabled tool IDs"),
 ):
-    """
-    WebSocket endpoint for real-time voice chat
-
-    Protocol:
-    - Client sends: {"type": "bidi_audio_input", "audio": "<base64>", ...}
-    - Server sends: {"type": "bidi_audio_stream", "audio": "<base64>", ...}
-                    {"type": "bidi_transcript_stream", "role": "user|assistant", "text": "...", ...}
-                    {"type": "bidi_interruption", ...}
-                    {"type": "tool_use", ...}
-                    {"type": "tool_result", ...}
-    """
+    """WebSocket endpoint for real-time voice chat"""
     await websocket.accept()
 
-    # Auto-generate session ID if not provided
+    # Try headers/query params first (works in local mode)
+    session_id = _get_param_from_request(websocket, "session-id", session_id)
+    user_id = _get_param_from_request(websocket, "user-id", user_id)
+    tools_list = _get_enabled_tools_from_request(websocket, enabled_tools)
+
+    # Cloud mode: receive config from first message (AgentCore Runtime proxy workaround)
+    if not session_id or not tools_list:
+        try:
+            first_msg = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
+            if first_msg.get("type") == "config":
+                session_id = first_msg.get("session_id") or session_id
+                user_id = first_msg.get("user_id") or user_id
+                tools_list = first_msg.get("enabled_tools") or tools_list
+                logger.info(f"[Voice] Config received from client message")
+        except Exception as e:
+            logger.warning(f"[Voice] Config message error: {e}")
+
     if not session_id:
         session_id = str(uuid.uuid4())
         logger.info(f"[Voice] Generated new session ID: {session_id}")
 
-    logger.info(f"[Voice] WebSocket connected: session={session_id}, user={user_id}")
-
-    # Parse enabled tools
-    tools_list: List[str] = []
-    if enabled_tools:
-        try:
-            tools_list = json.loads(enabled_tools)
-        except json.JSONDecodeError:
-            logger.warning(f"[Voice] Failed to parse enabled_tools: {enabled_tools}")
+    logger.info(f"[Voice] WebSocket connected: session={session_id}, user={user_id}, tools={len(tools_list)}")
 
     voice_agent = None
 

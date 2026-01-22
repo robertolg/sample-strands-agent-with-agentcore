@@ -32,7 +32,7 @@ ddgs>=9.0.0
 # OpenTelemetry (for observability)
 aws-opentelemetry-distro>=0.10.1
 
-bedrock-agentcore==1.1.1
+bedrock-agentcore>=1.1.5
 
 # Nova Act SDK (for natural language browser automation via AgentCore Browser)
 # Disabled: conflicts with strands-agents>=1.21.0 required for BidiAgent

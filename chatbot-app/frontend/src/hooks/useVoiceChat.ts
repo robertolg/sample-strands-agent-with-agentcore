@@ -261,8 +261,10 @@ export function useVoiceChat({
           break
 
         case 'bidi_interruption':
-          // User interrupted, clear audio queue
+          // User interrupted assistant - finalize current assistant message and clear audio
+          console.log('[VoiceChat] User interrupted - finalizing assistant message')
           playerRef.current?.clear()
+          onResponseComplete?.()  // Finalize streaming assistant message
           onStatusChange('voice_listening')
           break
 
@@ -489,6 +491,18 @@ export function useVoiceChat({
         userHasSpokenRef.current = false
         // Start idle timer
         resetIdleTimer()
+
+        // Send config message with session info
+        // Workaround: AgentCore Runtime WebSocket proxy doesn't convert
+        // X-Amzn-Bedrock-AgentCore-Runtime-Custom-* query params to headers
+        // So we send config via first WebSocket message instead
+        ws.send(JSON.stringify({
+          type: 'config',
+          session_id: activeSessionId,
+          user_id: userId,
+          enabled_tools: enabledTools,
+        }))
+        console.log(`[VoiceChat] Sent config: session=${activeSessionId}, tools=${enabledTools.length}`)
       }
 
       ws.onmessage = handleMessage

@@ -25,7 +25,7 @@ from models.autopilot_schemas import (
     ProgressReport,
     ToolGroup,
 )
-from agent.agent import get_current_date_pacific
+from agent.prompt_builder import get_current_date_pacific
 
 logger = logging.getLogger(__name__)
 

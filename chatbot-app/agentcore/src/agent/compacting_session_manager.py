@@ -661,11 +661,11 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
             if prepend_messages is None:
                 prepend_messages = []
 
-            # Load ALL messages from Session Memory
+            # Load ALL messages from Session Memory (fetch_all=True handles pagination)
             all_session_messages = self.session_repository.list_messages(
                 session_id=self.session_id,
                 agent_id=agent.agent_id,
-                limit=10000  # Load all messages
+                fetch_all=True,
             )
 
             # Update latest message tracking

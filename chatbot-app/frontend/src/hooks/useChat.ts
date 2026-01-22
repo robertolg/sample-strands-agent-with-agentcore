@@ -220,18 +220,23 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
   useEffect(() => {
     if (!sessionId || currentSessionIdRef.current !== sessionId) return
 
-    // Check for ongoing A2A agents
-    const hasOngoingResearch = messages.some(msg =>
-      msg.toolExecutions?.some(te =>
-        !te.isComplete && !te.isCancelled && te.toolName === 'research_agent'
-      )
-    )
+    // Check for ongoing A2A agents (single pass, reverse order for efficiency)
+    // Ongoing agents are typically in recent messages
+    let hasOngoingResearch = false
+    let hasOngoingBrowser = false
 
-    const hasOngoingBrowser = messages.some(msg =>
-      msg.toolExecutions?.some(te =>
-        !te.isComplete && !te.isCancelled && te.toolName === 'browser_use_agent'
-      )
-    )
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const toolExecutions = messages[i].toolExecutions
+      if (!toolExecutions) continue
+
+      for (const te of toolExecutions) {
+        if (te.isComplete || te.isCancelled) continue
+        if (te.toolName === 'research_agent') hasOngoingResearch = true
+        else if (te.toolName === 'browser_use_agent') hasOngoingBrowser = true
+      }
+      // Early exit if both found
+      if (hasOngoingResearch && hasOngoingBrowser) break
+    }
 
     if (hasOngoingResearch) {
       setUIState(prev => {
@@ -595,7 +600,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
         if (currentAssistantTurn.length > 0) {
           grouped.push({
             type: 'assistant_turn',
-            messages: [...currentAssistantTurn],
+            messages: currentAssistantTurn,
             id: `turn_${currentAssistantTurn[0].id}`
           })
           currentAssistantTurn = []
@@ -613,7 +618,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     if (currentAssistantTurn.length > 0) {
       grouped.push({
         type: 'assistant_turn',
-        messages: [...currentAssistantTurn],
+        messages: currentAssistantTurn,
         id: `turn_${currentAssistantTurn[0].id}`
       })
     }
@@ -690,104 +695,117 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     setUIState(prev => ({ ...prev, agentStatus: status }))
   }, [])
 
-  // Finalize current voice message (called when bidi_response_complete is received)
-  // This marks the current streaming assistant message as complete
+  // Finalize current voice message (called when bidi_response_complete, tool_use, or interruption)
+  // This marks ALL streaming voice messages as complete (both user and assistant)
+  // This is safe because:
+  // - bidi_response_complete: assistant finished speaking
+  // - tool_use: assistant pausing for tool execution
+  // - bidi_interruption: user interrupted, assistant should stop
+  // In all cases, any pending streaming message should be finalized.
   const finalizeVoiceMessage = useCallback(() => {
     console.log('[useChat] finalizeVoiceMessage called')
 
     setMessages(prev => {
-      // Find the streaming assistant message and finalize it
-      const streamingMsgIdx = prev.findIndex(msg =>
-        msg.isVoiceMessage &&
-        msg.isStreaming === true &&
-        msg.sender === 'bot'
+      // Find ALL streaming voice messages and finalize them
+      const hasStreamingMessages = prev.some(msg =>
+        msg.isVoiceMessage && msg.isStreaming === true
       )
 
-      if (streamingMsgIdx >= 0) {
-        const finalId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-        console.log(`[useChat] Finalizing assistant message at index ${streamingMsgIdx}: ${prev[streamingMsgIdx].id} -> ${finalId}`)
+      if (!hasStreamingMessages) {
+        console.log('[useChat] No streaming voice messages to finalize')
+        return prev
+      }
 
-        return prev.map((msg, idx) => {
-          if (idx === streamingMsgIdx) {
+      return prev.map(msg => {
+        if (msg.isVoiceMessage && msg.isStreaming === true) {
+          const finalId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+          console.log(`[useChat] Finalizing ${msg.sender} message: ${msg.id} -> ${finalId}`)
+          return { ...msg, id: finalId, isStreaming: false }
+        }
+        return msg
+      })
+    })
+  }, [])
+
+  // Update voice message with turn-based accumulation
+  //
+  // Key insight: Nova Sonic sends multiple FINAL transcripts for a single utterance.
+  // We must NOT finalize on each is_final=true, but accumulate until:
+  // 1. Role changes (user → assistant or vice versa)
+  // 2. Explicit finalize via bidi_response_complete, tool_use, or interruption
+  //
+  // Message lifecycle:
+  // 1. First delta for a role → Create new message with isStreaming=true
+  // 2. Subsequent deltas (same role) → APPEND delta to same message (ignore is_final)
+  // 3. Role changes → Finalize previous role's message, create new for new role
+  // 4. Explicit finalize events → Call finalizeVoiceMessage() separately
+  //
+  // IMPORTANT: is_final from Nova Sonic marks end of a "segment", not end of "turn".
+  // A turn can have multiple segments. Only finalize on role change or explicit events.
+  const updateVoiceMessage = useCallback((role: 'user' | 'assistant', deltaText: string, _isFinal: boolean) => {
+    const sender = role === 'user' ? 'user' : 'bot'
+    const otherSender = role === 'user' ? 'bot' : 'user'
+
+    console.log(`[useChat] updateVoiceMessage: role=${role}, delta="${deltaText.substring(0, 50)}..."`)
+
+    setMessages(prev => {
+      // Step 1: Check if there's a streaming message from the OTHER role
+      // If so, we need to finalize it first (role change occurred)
+      const otherStreamingIdx = prev.findIndex(msg =>
+        msg.isVoiceMessage &&
+        msg.isStreaming === true &&
+        msg.sender === otherSender
+      )
+
+      let updatedMessages = prev
+
+      if (otherStreamingIdx >= 0) {
+        // Finalize the other role's streaming message (role change)
+        const otherMsg = prev[otherStreamingIdx]
+        const finalId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+        console.log(`[useChat] Role changed: finalizing ${otherSender} message: ${otherMsg.id} -> ${finalId}`)
+
+        updatedMessages = prev.map((msg, idx) => {
+          if (idx === otherStreamingIdx) {
             return { ...msg, id: finalId, isStreaming: false }
           }
           return msg
         })
-      } else {
-        console.log('[useChat] No streaming assistant message to finalize')
-        return prev
       }
-    })
-  }, [])
 
-  // Update voice message with streaming support
-  //
-  // Key insight: Backend sends DELTA text (not accumulated).
-  // Frontend is responsible for accumulating deltas within a turn.
-  // is_final=true marks the end of an utterance.
-  //
-  // Message lifecycle:
-  // 1. First delta (is_final=false) → Create new message with isStreaming=true
-  // 2. Subsequent deltas (is_final=false) → APPEND delta to same message's text
-  // 3. Final delta (is_final=true) → Append delta, finalize message (isStreaming=false)
-  // 4. Next utterance starts → Create NEW message (don't update finalized ones)
-  //
-  // IMPORTANT: We must NEVER update a finalized message (isStreaming=false).
-  // Each finalized message represents a complete utterance.
-  const updateVoiceMessage = useCallback((role: 'user' | 'assistant', deltaText: string, isFinal: boolean) => {
-    const sender = role === 'user' ? 'user' : 'bot'
-
-    console.log(`[useChat] updateVoiceMessage: role=${role}, isFinal=${isFinal}, delta="${deltaText.substring(0, 50)}..."`)
-
-    setMessages(prev => {
-      // Find existing STREAMING message for this role
-      // Only match messages that are still streaming (not finalized)
-      const streamingMsgIdx = prev.findIndex(msg =>
+      // Step 2: Find existing streaming message for THIS role
+      const streamingMsgIdx = updatedMessages.findIndex(msg =>
         msg.isVoiceMessage &&
-        msg.isStreaming === true &&  // Explicit check for streaming
+        msg.isStreaming === true &&
         msg.sender === sender
       )
 
       if (streamingMsgIdx >= 0) {
-        // Update existing streaming message - APPEND delta
-        const existingMsg = prev[streamingMsgIdx]
+        // Append delta to existing streaming message (same role)
+        const existingMsg = updatedMessages[streamingMsgIdx]
         const newText = (existingMsg.text || '') + deltaText
 
-        console.log(`[useChat] Appending to streaming message: id=${existingMsg.id}, newLen=${newText.length}`)
+        console.log(`[useChat] Appending to streaming ${sender} message: id=${existingMsg.id}, newLen=${newText.length}`)
 
-        return prev.map((msg, idx) => {
+        return updatedMessages.map((msg, idx) => {
           if (idx === streamingMsgIdx) {
-            if (isFinal) {
-              // Finalize: assign permanent ID and set isStreaming=false
-              const finalId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-              console.log(`[useChat] Finalizing message: ${msg.id} -> ${finalId}, textLen=${newText.length}`)
-              return { ...msg, id: finalId, text: newText, isStreaming: false }
-            } else {
-              // Continue streaming: append delta to existing text
-              return { ...msg, text: newText }
-            }
+            return { ...msg, text: newText }
           }
           return msg
         })
       } else {
-        // No streaming message found for this role - create new one
-        // This happens when:
-        // 1. First message of the conversation
-        // 2. Previous message was finalized (is_final=true)
-        // 3. Role changed (user -> assistant or vice versa)
-        const newId = isFinal
-          ? `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-          : `voice_streaming_${role}_${Date.now()}`
+        // No streaming message for this role - create new one
+        const newId = `voice_streaming_${role}_${Date.now()}`
 
-        console.log(`[useChat] Creating NEW voice message: ${newId}, delta="${deltaText.substring(0, 30)}..."`)
+        console.log(`[useChat] Creating NEW voice message for ${sender}: ${newId}, delta="${deltaText.substring(0, 30)}..."`)
 
-        return [...prev, {
+        return [...updatedMessages, {
           id: newId,
-          text: deltaText,  // Start with this delta
+          text: deltaText,
           sender,
           timestamp: new Date().toISOString(),
           isVoiceMessage: true,
-          isStreaming: !isFinal,
+          isStreaming: true,  // Always start as streaming, finalize explicitly
         }]
       }
     })

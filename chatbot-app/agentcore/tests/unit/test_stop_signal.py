@@ -308,18 +308,18 @@ class TestGetStopSignalProvider:
         import agent.stop_signal as module
         module._provider_instance = None
 
-    def test_local_provider_when_local_env(self, monkeypatch):
-        """Test factory returns LocalStopSignalProvider when NEXT_PUBLIC_AGENTCORE_LOCAL=true."""
-        monkeypatch.setenv("NEXT_PUBLIC_AGENTCORE_LOCAL", "true")
+    def test_local_provider_when_no_memory_id(self, monkeypatch):
+        """Test factory returns LocalStopSignalProvider when MEMORY_ID not set."""
+        monkeypatch.delenv("MEMORY_ID", raising=False)
         LocalStopSignalProvider._instance = None
 
         provider = get_stop_signal_provider()
 
         assert isinstance(provider, LocalStopSignalProvider)
 
-    def test_dynamodb_provider_when_not_local(self, monkeypatch):
-        """Test factory returns DynamoDBStopSignalProvider when not local."""
-        monkeypatch.setenv("NEXT_PUBLIC_AGENTCORE_LOCAL", "false")
+    def test_dynamodb_provider_when_memory_id_set(self, monkeypatch):
+        """Test factory returns DynamoDBStopSignalProvider when MEMORY_ID is set (cloud mode)."""
+        monkeypatch.setenv("MEMORY_ID", "test-memory-id")
         monkeypatch.setenv("PROJECT_NAME", "test-project")
         monkeypatch.setenv("AWS_REGION", "us-east-1")
 
@@ -331,7 +331,7 @@ class TestGetStopSignalProvider:
 
     def test_dynamodb_provider_default_values(self, monkeypatch):
         """Test DynamoDB provider uses default values when env vars not set."""
-        monkeypatch.delenv("NEXT_PUBLIC_AGENTCORE_LOCAL", raising=False)
+        monkeypatch.setenv("MEMORY_ID", "test-memory-id")  # Cloud mode
         monkeypatch.delenv("PROJECT_NAME", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
 
@@ -343,7 +343,7 @@ class TestGetStopSignalProvider:
 
     def test_provider_singleton(self, monkeypatch):
         """Test factory returns same instance on subsequent calls."""
-        monkeypatch.setenv("NEXT_PUBLIC_AGENTCORE_LOCAL", "true")
+        monkeypatch.delenv("MEMORY_ID", raising=False)  # Local mode
         LocalStopSignalProvider._instance = None
 
         provider1 = get_stop_signal_provider()

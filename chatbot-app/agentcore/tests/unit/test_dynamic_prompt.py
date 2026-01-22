@@ -444,31 +444,70 @@ class TestStrandsAgentSignatureCompliance:
     Strands Agent.__init__ signature:
         Agent(
             model: BedrockModel,
-            system_prompt: str,           # <-- Must be string
-            tools: List[Callable | MCPClient],  # <-- Must be list of tool functions or MCP clients
+            system_prompt: str | list[SystemContentBlock],  # String or list of content blocks
+            tools: List[Callable | MCPClient],  # Must be list of tool functions or MCP clients
             session_manager: SessionManager,
             hooks: Optional[List[HookProvider]] = None
         )
+
+    SystemContentBlock can contain:
+        - {"text": "prompt text"}
+        - {"cachePoint": {"type": "default"}}
     """
 
     def test_system_prompt_is_string_type(self):
-        """Verify system prompt is a string (not list or dict)."""
+        """Verify system prompt can be a string (legacy format)."""
         prompt_sections = ["Base prompt.", "Tool guidance.", "Date: 2024-01-15"]
 
-        # Final system_prompt must be a string
+        # String format system_prompt
         system_prompt = "\n\n".join(prompt_sections)
 
         assert isinstance(system_prompt, str)
-        assert not isinstance(system_prompt, list)
         assert not isinstance(system_prompt, dict)
 
-    def test_system_prompt_not_empty(self):
-        """Verify system prompt is not empty string."""
-        prompt_sections = ["Base prompt.", "Date: 2024-01-15"]
-        system_prompt = "\n\n".join(prompt_sections)
+    def test_system_prompt_is_list_of_content_blocks(self):
+        """Verify system prompt can be list of SystemContentBlock (new format)."""
+        system_prompt = [
+            {"text": "Base prompt."},
+            {"text": "Tool guidance."},
+            {"text": "Date: 2024-01-15"},
+        ]
 
-        assert len(system_prompt) > 0
-        assert system_prompt.strip() != ""
+        assert isinstance(system_prompt, list)
+        for block in system_prompt:
+            assert isinstance(block, dict)
+            assert "text" in block or "cachePoint" in block
+
+    def test_system_prompt_list_with_cache_point(self):
+        """Verify system prompt list can include cache points."""
+        system_prompt = [
+            {"text": "Base prompt."},
+            {"text": "Tool guidance."},
+            {"cachePoint": {"type": "default"}},
+            {"text": "Date: 2024-01-15"},
+        ]
+
+        assert isinstance(system_prompt, list)
+        assert len(system_prompt) == 4
+
+        # Verify cache point structure
+        cache_block = system_prompt[2]
+        assert "cachePoint" in cache_block
+        assert cache_block["cachePoint"]["type"] == "default"
+
+    def test_system_prompt_not_empty(self):
+        """Verify system prompt is not empty (string or list)."""
+        # String format
+        string_prompt = "Base prompt.\n\nDate: 2024-01-15"
+        assert len(string_prompt) > 0
+        assert string_prompt.strip() != ""
+
+        # List format
+        list_prompt = [{"text": "Base prompt."}, {"text": "Date: 2024-01-15"}]
+        assert len(list_prompt) > 0
+        # Verify at least one block has text content
+        has_text = any(block.get("text") for block in list_prompt)
+        assert has_text
 
     def test_tools_is_list_type(self):
         """Verify tools parameter is a list."""
@@ -500,8 +539,8 @@ class TestStrandsAgentSignatureCompliance:
         for tool in tools:
             assert callable(tool)
 
-    def test_system_prompt_construction_for_agent(self):
-        """Test full system prompt construction as it would be passed to Agent."""
+    def test_system_prompt_construction_for_agent_string_format(self):
+        """Test full system prompt construction as string (legacy format)."""
         base_prompt = "You are an AI assistant."
         tool_guidance_1 = "Calculator: Use for math."
         tool_guidance_2 = "Search: Use for web queries."
@@ -520,6 +559,26 @@ class TestStrandsAgentSignatureCompliance:
         # Verify sections are separated by double newlines
         assert "\n\n" in system_prompt
         assert system_prompt.count("\n\n") == 3  # 4 sections = 3 separators
+
+    def test_system_prompt_construction_for_agent_list_format(self):
+        """Test full system prompt construction as list of content blocks (new format)."""
+        system_prompt = [
+            {"text": "You are an AI assistant."},
+            {"text": "Calculator: Use for math."},
+            {"text": "Search: Use for web queries."},
+            {"text": "Current date: 2024-01-15 (Monday) 10:00 PST"},
+        ]
+
+        # Verify format matches what Agent expects
+        assert isinstance(system_prompt, list)
+        assert len(system_prompt) == 4
+
+        # Each block should have text
+        all_text = " ".join(block.get("text", "") for block in system_prompt)
+        assert "You are an AI assistant." in all_text
+        assert "Calculator:" in all_text
+        assert "Search:" in all_text
+        assert "Current date:" in all_text
 
     def test_filtered_tools_format_for_agent(self):
         """Test that filtered tools are in correct format for Agent.tools parameter."""

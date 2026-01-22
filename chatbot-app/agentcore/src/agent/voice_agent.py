@@ -40,14 +40,10 @@ from strands.types._events import ToolUseStreamEvent, ToolResultEvent
 from strands.experimental.bidi.models.nova_sonic import BidiNovaSonicModel
 from strands.session.file_session_manager import FileSessionManager
 
-# Import shared tool registry from ChatbotAgent
-from agent.agent import TOOL_REGISTRY
-# Import tool guidance for dynamic system prompt
-from agent.tool_guidance import build_voice_system_prompt
-# Import Gateway MCP client (shared with ChatbotAgent)
-from agent.gateway_mcp_client import get_gateway_client_if_enabled
-# Import A2A tools module
-import a2a_tools
+# Import prompt builder for dynamic system prompt
+from agent.prompt_builder import build_voice_system_prompt
+# Import unified tool filter (shared with ChatbotAgent)
+from agent.tool_filter import filter_tools
 
 # AgentCore Memory integration (optional, only for cloud deployment)
 try:
@@ -190,7 +186,7 @@ class VoiceChatbotAgent:
                 session_messages = repo.list_messages(
                     session_id=self.session_id,
                     agent_id=self.TEXT_AGENT_ID,
-                    offset=0
+                    fetch_all=True,
                 )
 
                 if session_messages:
@@ -253,60 +249,21 @@ class VoiceChatbotAgent:
     def _get_filtered_tools(self) -> List:
         """
         Get tools filtered by enabled_tools list.
-        Includes local tools, Gateway MCP client, and A2A agents.
-        (Same logic as ChatbotAgent.get_filtered_tools)
+        Uses unified tool_filter module (shared with ChatbotAgent).
         """
-        if not self.enabled_tools:
-            return []
+        result = filter_tools(
+            enabled_tool_ids=self.enabled_tools,
+            log_prefix="[VoiceAgent]"
+        )
 
-        # Filter local tools based on enabled_tools
-        filtered_tools = []
-        gateway_tool_ids = []
-        a2a_agent_ids = []
+        # Store Gateway client for lifecycle management
+        self.gateway_client = result.clients.get("gateway")
 
-        for tool_id in self.enabled_tools:
-            if tool_id in TOOL_REGISTRY:
-                # Local tool
-                filtered_tools.append(TOOL_REGISTRY[tool_id])
-            elif tool_id.startswith("gateway_"):
-                # Gateway MCP tool - collect for filtering
-                gateway_tool_ids.append(tool_id)
-            elif tool_id.startswith("agentcore_"):
-                # A2A Agent tool - collect for creation
-                a2a_agent_ids.append(tool_id)
-            else:
-                logger.warning(f"[VoiceAgent] Tool '{tool_id}' not found in registry, skipping")
+        # Log any validation errors
+        for error in result.validation_errors:
+            logger.warning(f"[VoiceAgent] {error}")
 
-        logger.debug(f"[VoiceAgent] Local tools enabled: {len(filtered_tools)}")
-        logger.debug(f"[VoiceAgent] Gateway tools enabled: {len(gateway_tool_ids)}")
-        logger.debug(f"[VoiceAgent] A2A agents enabled: {len(a2a_agent_ids)}")
-
-        # Add Gateway MCP client if Gateway tools are enabled
-        # Store as instance variable to keep session alive during Agent lifecycle
-        if gateway_tool_ids:
-            self.gateway_client = get_gateway_client_if_enabled(enabled_tool_ids=gateway_tool_ids)
-            if self.gateway_client:
-                # Using Managed Integration (Strands 1.16+) - pass MCPClient directly to Agent
-                # BidiAgent will automatically manage lifecycle and filter tools
-                filtered_tools.append(self.gateway_client)
-                logger.info(f"[VoiceAgent] ✅ Gateway MCP client added: {gateway_tool_ids}")
-            else:
-                logger.warning("[VoiceAgent] ⚠️ Gateway MCP client not available")
-
-        # Add A2A Agent tools
-        if a2a_agent_ids:
-            for agent_id in a2a_agent_ids:
-                try:
-                    # Create A2A tool based on agent_id
-                    a2a_tool = a2a_tools.create_a2a_tool(agent_id)
-                    if a2a_tool:
-                        filtered_tools.append(a2a_tool)
-                        logger.info(f"[VoiceAgent] ✅ A2A Agent added: {agent_id}")
-                except Exception as e:
-                    logger.error(f"[VoiceAgent] Failed to create A2A tool {agent_id}: {e}")
-
-        logger.info(f"[VoiceAgent] Total enabled tools: {len(filtered_tools)} (local + gateway + a2a)")
-        return filtered_tools
+        return result.tools
 
     async def start(self) -> None:
         """Start the bidirectional agent connection

@@ -10,25 +10,17 @@ import logging
 import os
 from typing import AsyncGenerator, Dict, Any, List, Optional
 from pathlib import Path
-from datetime import datetime
 from strands import Agent
 from strands.models import BedrockModel
 from strands.session.file_session_manager import FileSessionManager
-from strands.tools.executors import SequentialToolExecutor
 from streaming.event_processor import StreamEventProcessor
 from agent.hooks import ResearchApprovalHook, ConversationCachingHook
-
-# Import timezone support (zoneinfo for Python 3.9+, fallback to pytz)
-try:
-    from zoneinfo import ZoneInfo
-    TIMEZONE_AVAILABLE = True
-except ImportError:
-    try:
-        import pytz
-        TIMEZONE_AVAILABLE = True
-    except ImportError:
-        TIMEZONE_AVAILABLE = False
-        logger.warning("Neither zoneinfo nor pytz available - date will use UTC")
+from agent.prompt_builder import (
+    build_text_system_prompt,
+    system_prompt_to_string,
+    load_tool_guidance,
+    SystemContentBlock,
+)
 
 # AgentCore Memory integration (optional, only for cloud deployment)
 try:
@@ -48,43 +40,10 @@ import local_tools
 # Import built-in tools module (AWS Bedrock-powered tools)
 import builtin_tools
 
-# Import Gateway MCP client
-from agent.gateway_mcp_client import get_gateway_client_if_enabled
-
-# Import A2A tools module
-import a2a_tools
+# Import unified tool filter
+from agent.tool_filter import filter_tools
 
 logger = logging.getLogger(__name__)
-
-
-def get_current_date_pacific() -> str:
-    """Get current date and hour in US Pacific timezone (America/Los_Angeles)"""
-    try:
-        if TIMEZONE_AVAILABLE:
-            try:
-                # Try zoneinfo first (Python 3.9+)
-                from zoneinfo import ZoneInfo
-                pacific_tz = ZoneInfo("America/Los_Angeles")
-                now = datetime.now(pacific_tz)
-                # Get timezone abbreviation (PST/PDT)
-                tz_abbr = now.strftime("%Z")
-            except (ImportError, NameError):
-                # Fallback to pytz
-                import pytz
-                pacific_tz = pytz.timezone("America/Los_Angeles")
-                now = datetime.now(pacific_tz)
-                # Get timezone abbreviation (PST/PDT)
-                tz_abbr = now.strftime("%Z")
-
-            return now.strftime(f"%Y-%m-%d (%A) %H:00 {tz_abbr}")
-        else:
-            # Fallback to UTC if no timezone library available
-            now = datetime.utcnow()
-            return now.strftime("%Y-%m-%d (%A) %H:00 UTC")
-    except Exception as e:
-        logger.warning(f"Failed to get Pacific time: {e}, using UTC")
-        now = datetime.utcnow()
-        return now.strftime("%Y-%m-%d (%A) %H:00 UTC")
 
 
 
@@ -163,46 +122,14 @@ class ChatbotAgent:
         self.temperature = temperature if temperature is not None else 0.7
 
         # Check if this is an autopilot directive (system_prompt starts with "You are executing Step")
-        is_autopilot_directive = system_prompt and system_prompt.startswith("You are executing Step")
+        autopilot_directive = system_prompt if (system_prompt and system_prompt.startswith("You are executing Step")) else None
 
-        # Base system prompt (used in both normal and autopilot modes)
-        base_system_prompt = """You are an intelligent AI agent with dynamic tool capabilities. You can perform various tasks based on the combination of tools available to you.
-
-Key guidelines:
-- Use available tools when they genuinely enhance your response
-- You can ONLY use tools that are explicitly provided to you
-- Select the most appropriate tool for the task - avoid redundant tool calls
-- If you don't have the right tool for a task, clearly inform the user
-
-Your goal is to be helpful, accurate, and efficient."""
-
-        # Load tool-specific guidance dynamically based on enabled tools
-        tool_guidance_list = self._load_tool_guidance()
-        logger.info(f"Loaded {len(tool_guidance_list)} tool guidance sections")
-
-        current_date = get_current_date_pacific()
-
-        # Construct system prompt
-        prompt_sections = [base_system_prompt]
-
-        # Add autopilot task section if in autopilot mode
-        if is_autopilot_directive:
-            logger.info(f"[Autopilot] Adding directive to system prompt")
-            prompt_sections.append(system_prompt)
-
-        # Add tool-specific guidance sections
-        if tool_guidance_list:
-            prompt_sections.extend(tool_guidance_list)
-
-        # Add date as final section
-        prompt_sections.append(f"Current date: {current_date}")
-
-        # Combine all sections with double newline separator
-        self.system_prompt = "\n\n".join(prompt_sections)
-
-        logger.debug(f"Using system prompt with {len(prompt_sections)} sections (base + {len(tool_guidance_list)} tool guidance + date)")
-        logger.debug(f"System prompt length: {len(self.system_prompt)} characters")
-        logger.debug(f"System prompt preview (first 200 chars): {self.system_prompt[:200]}")
+        # Build system prompt using prompt_builder module
+        # Returns list of SystemContentBlock for better tracking and caching control
+        self.system_prompt = build_text_system_prompt(
+            enabled_tools=enabled_tools,
+            autopilot_directive=autopilot_directive
+        )
 
         self.caching_enabled = caching_enabled if caching_enabled is not None else True
         self.compaction_enabled = compaction_enabled if compaction_enabled is not None else True
@@ -214,7 +141,7 @@ Your goal is to be helpful, accurate, and efficient."""
 
         if memory_id and AGENTCORE_MEMORY_AVAILABLE:
             # Cloud deployment: Use AgentCore Memory
-            logger.debug(f"🚀 Cloud mode: Using AgentCore Memory (memory_id={memory_id})")
+            logger.debug(f"Cloud mode: Using AgentCore Memory (memory_id={memory_id})")
 
             # Get strategy IDs dynamically from Memory configuration
             strategy_ids = self._get_memory_strategy_ids(memory_id, aws_region)
@@ -227,13 +154,13 @@ Your goal is to be helpful, accurate, and efficient."""
             if 'USER_PREFERENCE' in strategy_ids:
                 pref_namespace = f"/strategies/{strategy_ids['USER_PREFERENCE']}/actors/{self.user_id}"
                 retrieval_config[pref_namespace] = RetrievalConfig(top_k=5, relevance_score=0.7)
-                logger.debug(f"📝 User preferences namespace: {pref_namespace}")
+                logger.debug(f"User preferences namespace: {pref_namespace}")
 
             # Semantic facts (learned information about user)
             if 'SEMANTIC' in strategy_ids:
                 facts_namespace = f"/strategies/{strategy_ids['SEMANTIC']}/actors/{self.user_id}"
                 retrieval_config[facts_namespace] = RetrievalConfig(top_k=10, relevance_score=0.3)
-                logger.debug(f"📚 Semantic facts namespace: {facts_namespace}")
+                logger.debug(f"Semantic facts namespace: {facts_namespace}")
 
             # Session summaries (previous conversation summaries)
             # Note: Summary namespace includes sessionId, so we use a broader pattern for cross-session retrieval
@@ -241,10 +168,10 @@ Your goal is to be helpful, accurate, and efficient."""
                 # For summaries, we retrieve from the actor-level to get summaries across sessions
                 summary_namespace = f"/strategies/{strategy_ids['SUMMARIZATION']}/actors/{self.user_id}"
                 retrieval_config[summary_namespace] = RetrievalConfig(top_k=3, relevance_score=0.5)
-                logger.debug(f"📋 Session summaries namespace: {summary_namespace}")
+                logger.debug(f"Session summaries namespace: {summary_namespace}")
 
             if not retrieval_config:
-                logger.warning("⚠️ No retrieval_config configured - LTM retrieval disabled")
+                logger.warning("No retrieval_config configured - LTM retrieval disabled")
 
             # Configure AgentCore Memory with dynamic retrieval config
             # LTM retrieval disabled - set retrieval_config=None to skip retrieve_customer_context hook
@@ -280,7 +207,7 @@ Your goal is to be helpful, accurate, and efficient."""
                     summarization_strategy_id=summarization_strategy_id
                 )
 
-                logger.debug(f"✅ AgentCore Memory initialized (with compaction): user_id={self.user_id}")
+                logger.debug(f"AgentCore Memory initialized (with compaction): user_id={self.user_id}")
                 logger.debug(f"   LTM retrieval: {len(retrieval_config)} namespace(s) configured")
                 logger.debug(f"   Compaction: threshold={token_threshold:,}, protected_turns={protected_turns}")
             else:
@@ -293,10 +220,10 @@ Your goal is to be helpful, accurate, and efficient."""
                     metrics_only=True  # Track metrics but don't apply compaction
                 )
 
-                logger.debug(f"✅ AgentCore Memory initialized (metrics_only - baseline): user_id={self.user_id}")
+                logger.debug(f"AgentCore Memory initialized (metrics_only - baseline): user_id={self.user_id}")
                 logger.debug(f"   LTM retrieval: {len(retrieval_config)} namespace(s) configured")
-                logger.debug(f"   ⚠️  Compaction DISABLED - all messages loaded without truncation or summarization")
-                logger.debug(f"   📊 Context token tracking ENABLED for baseline comparison")
+                logger.debug(f"    Compaction DISABLED - all messages loaded without truncation or summarization")
+                logger.debug(f"   Context token tracking ENABLED for baseline comparison")
         else:
             # Local development: Use file-based session manager with buffering wrapper
             logger.debug(f"💻 Local mode: Using FileSessionManager with buffering")
@@ -315,7 +242,7 @@ Your goal is to be helpful, accurate, and efficient."""
                 session_id=session_id
             )
 
-            logger.debug(f"✅ FileSessionManager with buffering initialized: {sessions_dir}")
+            logger.debug(f"FileSessionManager with buffering initialized: {sessions_dir}")
 
         self.create_agent()
 
@@ -324,7 +251,8 @@ Your goal is to be helpful, accurate, and efficient."""
         return {
             "model_id": self.model_id,
             "temperature": self.temperature,
-            "system_prompt": self.system_prompt,
+            "system_prompt": system_prompt_to_string(self.system_prompt),
+            "system_prompt_blocks": len(self.system_prompt),
             "caching_enabled": self.caching_enabled
         }
 
@@ -368,184 +296,24 @@ Your goal is to be helpful, accurate, and efficient."""
             logger.warning(f"Failed to get memory strategy IDs: {e}")
             return {}
 
-    def _load_tool_guidance(self) -> List[str]:
-        """
-        Load tool-specific system prompt guidance based on enabled tools.
-
-        - Local mode: Load from tools-config.json (required)
-        - Cloud mode: Load from DynamoDB {PROJECT_NAME}-users-v2 table (required)
-
-        No fallback - errors are logged clearly for debugging.
-        """
-        if not self.enabled_tools or len(self.enabled_tools) == 0:
-            return []
-
-        import boto3
-        from botocore.exceptions import ClientError
-
-        # Get environment variables
-        aws_region = os.environ.get('AWS_REGION', 'us-west-2')
-        # Determine mode by MEMORY_ID presence (local = no MEMORY_ID)
-        memory_id = os.environ.get('MEMORY_ID')
-        is_cloud = memory_id is not None
-
-        guidance_sections = []
-
-        # Local mode: load from tools-config.json (required)
-        if not is_cloud:
-            import json
-            config_path = Path(__file__).parent.parent.parent.parent / "frontend" / "src" / "config" / "tools-config.json"
-            logger.debug(f"Loading tool guidance from local: {config_path}")
-
-            if not config_path.exists():
-                logger.error(f"❌ TOOL CONFIG NOT FOUND: {config_path}")
-                return []
-
-            with open(config_path, 'r') as f:
-                tools_config = json.load(f)
-
-            # Check all tool categories for systemPromptGuidance
-            for category in ['local_tools', 'builtin_tools', 'browser_automation', 'gateway_targets', 'agentcore_runtime_a2a']:
-                if category in tools_config:
-                    for tool_group in tools_config[category]:
-                        tool_id = tool_group.get('id')
-
-                        # Check if any enabled tool matches this group
-                        if tool_id and self._is_tool_group_enabled(tool_id, tool_group):
-                            guidance = tool_group.get('systemPromptGuidance')
-                            if guidance:
-                                guidance_sections.append(guidance)
-                                logger.debug(f"Added guidance for tool group: {tool_id}")
-
-        # Cloud mode: load from DynamoDB (required)
-        else:
-            dynamodb_table = self._get_dynamodb_table_name()
-            logger.debug(f"Loading tool guidance from DynamoDB table: {dynamodb_table}")
-
-            dynamodb = boto3.resource('dynamodb', region_name=aws_region)
-            table = dynamodb.Table(dynamodb_table)
-
-            # Load tool registry from DynamoDB (userId='TOOL_REGISTRY', sk='CONFIG')
-            response = table.get_item(Key={'userId': 'TOOL_REGISTRY', 'sk': 'CONFIG'})
-
-            if 'Item' not in response:
-                logger.error(f"❌ TOOL_REGISTRY NOT FOUND in DynamoDB table: {dynamodb_table}")
-                logger.error("   Please ensure BFF has initialized the tool registry")
-                return []
-
-            if 'toolRegistry' not in response['Item']:
-                logger.error(f"❌ toolRegistry field NOT FOUND in TOOL_REGISTRY record")
-                return []
-
-            tool_registry = response['Item']['toolRegistry']
-            logger.debug(f"✅ Loaded tool registry from DynamoDB: {dynamodb_table}")
-
-            # Check all tool categories
-            for category in ['local_tools', 'builtin_tools', 'browser_automation', 'gateway_targets', 'agentcore_runtime_a2a']:
-                if category in tool_registry:
-                    for tool_group in tool_registry[category]:
-                        tool_id = tool_group.get('id')
-
-                        # Check if any enabled tool matches this group
-                        if tool_id and self._is_tool_group_enabled(tool_id, tool_group):
-                            guidance = tool_group.get('systemPromptGuidance')
-                            if guidance:
-                                guidance_sections.append(guidance)
-                                logger.debug(f"Added guidance for tool group: {tool_id}")
-
-        logger.debug(f"✅ Tool guidance loaded: {len(guidance_sections)} sections")
-        return guidance_sections
-
-    def _is_tool_group_enabled(self, tool_group_id: str, tool_group: Dict) -> bool:
-        """
-        Check if a tool group is enabled based on enabled_tools list.
-
-        For dynamic tool groups (isDynamic=true), checks if any sub-tool is enabled.
-        For static tool groups, checks if the group ID itself is enabled.
-        """
-        if not self.enabled_tools:
-            return False
-
-        # Check if group ID itself is in enabled tools
-        if tool_group_id in self.enabled_tools:
-            return True
-
-        # For dynamic tool groups, check if any sub-tool is enabled
-        if tool_group.get('isDynamic') and 'tools' in tool_group:
-            for sub_tool in tool_group['tools']:
-                if sub_tool.get('id') in self.enabled_tools:
-                    return True
-
-        return False
-
     def get_filtered_tools(self) -> List:
         """
         Get tools filtered by enabled_tools list.
-        Includes local tools, Gateway MCP client, and A2A agents.
+        Uses unified tool_filter module for local, Gateway, and A2A tools.
         """
-        # If no enabled_tools specified (None or empty), return NO tools
-        if self.enabled_tools is None or len(self.enabled_tools) == 0:
-            logger.debug("No enabled_tools specified - Agent will run WITHOUT any tools")
-            return []
+        result = filter_tools(
+            enabled_tool_ids=self.enabled_tools,
+            log_prefix="[ChatbotAgent]"
+        )
 
-        # Filter local tools based on enabled_tools
-        filtered_tools = []
-        gateway_tool_ids = []
-        a2a_agent_ids = []
+        # Store Gateway client for lifecycle management
+        self.gateway_client = result.clients.get("gateway")
 
-        for tool_id in self.enabled_tools:
-            if tool_id in TOOL_REGISTRY:
-                # Local tool
-                filtered_tools.append(TOOL_REGISTRY[tool_id])
-            elif tool_id.startswith("gateway_"):
-                # Gateway MCP tool - collect for filtering
-                gateway_tool_ids.append(tool_id)
-            elif tool_id.startswith("agentcore_"):
-                # A2A Agent tool - collect for creation
-                a2a_agent_ids.append(tool_id)
-            else:
-                logger.warning(f"Tool '{tool_id}' not found in registry, skipping")
+        # Log any validation errors
+        for error in result.validation_errors:
+            logger.warning(f"[ChatbotAgent] {error}")
 
-        logger.debug(f"Local tools enabled: {len(filtered_tools)}")
-        logger.debug(f"Gateway tools enabled: {len(gateway_tool_ids)}")
-        logger.debug(f"A2A agents enabled: {len(a2a_agent_ids)}")
-
-        # Add Gateway MCP client if Gateway tools are enabled
-        # Store as instance variable to keep session alive during Agent lifecycle
-        if gateway_tool_ids:
-            self.gateway_client = get_gateway_client_if_enabled(enabled_tool_ids=gateway_tool_ids)
-            if self.gateway_client:
-                # Using Managed Integration (Strands 1.16+) - pass MCPClient directly to Agent
-                # Agent will automatically manage lifecycle and filter tools
-                filtered_tools.append(self.gateway_client)
-                logger.debug(f"✅ Gateway MCP client added (Managed Integration with Strands 1.16+)")
-                logger.debug(f"   Enabled Gateway tool IDs: {gateway_tool_ids}")
-
-                # Note: _tool_name_map will be created when Agent calls list_tools_sync()
-                # during initialization via Managed Integration.
-                # We don't need to call it explicitly here.
-            else:
-                logger.warning("⚠️  Gateway MCP client not available")
-
-        # Add A2A Agent tools
-        if a2a_agent_ids:
-            for agent_id in a2a_agent_ids:
-                try:
-                    # Create A2A tool based on agent_id
-                    a2a_tool = self._create_a2a_tool(agent_id)
-                    if a2a_tool:
-                        filtered_tools.append(a2a_tool)
-                        logger.debug(f"✅ A2A Agent added: {agent_id}")
-                except Exception as e:
-                    logger.error(f"Failed to create A2A tool {agent_id}: {e}")
-
-        logger.debug(f"Total enabled tools: {len(filtered_tools)} (local + gateway + a2a)")
-        return filtered_tools
-
-    def _create_a2a_tool(self, agent_id: str):
-        """Create A2A agent tool from agent_id"""
-        # Delegate to a2a_tools module
-        return a2a_tools.create_a2a_tool(agent_id)
+        return result.tools
 
     def _load_voice_history(self) -> List[Dict[str, Any]]:
         """
@@ -567,7 +335,7 @@ Your goal is to be helpful, accurate, and efficient."""
                 session_messages = repo.list_messages(
                     session_id=self.session_id,
                     agent_id=self.VOICE_AGENT_ID,
-                    offset=0
+                    fetch_all=True,
                 )
 
                 if session_messages:
@@ -615,7 +383,7 @@ Your goal is to be helpful, accurate, and efficient."""
             # prompt cache point would cause duplicate write premiums (25% extra cost)
             # without any read benefit. Testing showed this costs ~21% more than needed.
 
-            logger.debug("✅ Bedrock retry config: max_attempts=10, mode=adaptive")
+            logger.debug("Bedrock retry config: max_attempts=10, mode=adaptive")
             model = BedrockModel(**model_config)
 
             # Get filtered tools based on user preferences
@@ -627,21 +395,25 @@ Your goal is to be helpful, accurate, and efficient."""
             # Add research approval hook (always enabled)
             research_approval_hook = ResearchApprovalHook(app_name="chatbot")
             hooks.append(research_approval_hook)
-            logger.debug("✅ Research approval hook enabled (BeforeToolCallEvent)")
+            logger.debug("Research approval hook enabled (BeforeToolCallEvent)")
 
             # Add conversation caching hook if enabled
             if self.caching_enabled:
                 conversation_hook = ConversationCachingHook(enabled=True)
                 hooks.append(conversation_hook)
-                logger.debug("✅ Conversation caching hook enabled")
+                logger.debug("Conversation caching hook enabled")
 
             # Load voice history for conversation continuity
             voice_history = self._load_voice_history()
 
-            # Create agent with session manager, hooks, and system prompt (as string)
+            # Create agent with session manager, hooks, and system prompt as list of content blocks
+            # Using list[SystemContentBlock] enables:
+            # - Better tracking of each prompt section
+            # - Flexible cache point insertion
+            # - Modular prompt management
             agent_kwargs = {
                 "model": model,
-                "system_prompt": self.system_prompt,  # String system prompt (Strands 1.14.0)
+                "system_prompt": self.system_prompt,  # List[SystemContentBlock]
                 "tools": tools,
                 "session_manager": self.session_manager,
                 "hooks": hooks if hooks else None
@@ -650,19 +422,21 @@ Your goal is to be helpful, accurate, and efficient."""
             # Add voice history as initial messages if available
             if voice_history:
                 agent_kwargs["messages"] = voice_history
-                logger.debug(f"✅ Added {len(voice_history)} messages from voice mode history")
+                logger.debug(f"Added {len(voice_history)} messages from voice mode history")
 
             # Use NullConversationManager if requested (disables Strands' default sliding window)
             if self.use_null_conversation_manager:
                 from strands.agent.conversation_manager import NullConversationManager
                 agent_kwargs["conversation_manager"] = NullConversationManager()
-                logger.debug("✅ Using NullConversationManager (no context manipulation by Strands)")
+                logger.debug("Using NullConversationManager (no context manipulation by Strands)")
 
             self.agent = Agent(**agent_kwargs)
 
-            logger.debug(f"✅ Agent created with {len(tools)} tools")
-            logger.debug(f"✅ System prompt: {len(self.system_prompt)} characters")
-            logger.debug(f"✅ Session Manager: {type(self.session_manager).__name__}")
+            # Calculate total characters for logging
+            total_chars = sum(len(block.get("text", "")) for block in self.system_prompt)
+            logger.debug(f"Agent created with {len(tools)} tools")
+            logger.debug(f"System prompt: {len(self.system_prompt)} content blocks, {total_chars} characters")
+            logger.debug(f"Session Manager: {type(self.session_manager).__name__}")
 
             if AGENTCORE_MEMORY_AVAILABLE and os.environ.get('MEMORY_ID'):
                 logger.debug(f"   • Session: {self.session_id}, User: {self.user_id}")
@@ -764,14 +538,14 @@ Your goal is to be helpful, accurate, and efficient."""
             # Get last LLM call's input tokens from stream processor
             # This is the actual context size (not accumulated across multiple LLM calls)
             context_tokens = self.stream_processor.last_llm_input_tokens
-            logger.info(f"📊 _update_compaction_state: context_tokens={context_tokens:,} (from last LLM call)")
+            logger.info(f"_update_compaction_state: context_tokens={context_tokens:,} (from last LLM call)")
 
             if context_tokens > 0:
                 self.session_manager.update_after_turn(context_tokens, self.agent.agent_id)
-                logger.info(f"✅ Compaction updated: context={context_tokens:,} tokens")
+                logger.info(f"Compaction updated: context={context_tokens:,} tokens")
             else:
                 # Skip compaction if no token data available
-                logger.info(f"⚠️ Skipping compaction: context_tokens=0 (no token data from stream processor)")
+                logger.info(f"Skipping compaction: context_tokens=0 (no token data from stream processor)")
         except Exception as e:
             logger.error(f"Compaction update failed: {e}")
 
@@ -865,7 +639,7 @@ Your goal is to be helpful, accurate, and efficient."""
             document_type: Type name for logging (e.g., 'Word', 'Excel', 'image')
         """
         # Debug: log what we're filtering
-        logger.debug(f"🔍 Filtering {len(uploaded_files)} files for {document_type} (extensions: {extensions})")
+        logger.debug(f"Filtering {len(uploaded_files)} files for {document_type} (extensions: {extensions})")
         for f in uploaded_files:
             logger.debug(f"   - {f['filename']} (matches: {any(f['filename'].lower().endswith(ext) for ext in extensions)})")
 
@@ -875,7 +649,7 @@ Your goal is to be helpful, accurate, and efficient."""
             if any(f['filename'].lower().endswith(ext) for ext in extensions)
         ]
 
-        logger.debug(f"✅ Filtered {len(filtered_files)} {document_type} file(s)")
+        logger.debug(f"Filtered {len(filtered_files)} {document_type} file(s)")
 
         if not filtered_files:
             return
@@ -896,7 +670,7 @@ Your goal is to be helpful, accurate, and efficient."""
                     file_bytes,
                     metadata={'auto_stored': 'true'}
                 )
-                logger.debug(f"✅ Auto-stored {document_type}: {filename}")
+                logger.debug(f"Auto-stored {document_type}: {filename}")
             except Exception as e:
                 logger.error(f"Failed to auto-store {document_type} file {filename}: {e}")
 
@@ -915,7 +689,7 @@ Your goal is to be helpful, accurate, and efficient."""
             uploaded_files: List of uploaded file info dicts with 'filename' and 'bytes'
         """
         # Debug: log what files we're processing
-        logger.debug(f"📦 Auto-store called with {len(uploaded_files)} file(s):")
+        logger.debug(f"Auto-store called with {len(uploaded_files)} file(s):")
         for f in uploaded_files:
             logger.debug(f"   - {f['filename']} ({f['content_type']})")
 
@@ -1065,7 +839,7 @@ Your goal is to be helpful, accurate, and efficient."""
                 # Word/Excel documents - use workspace in cloud mode to avoid bytes serialization error
                 if is_cloud_mode:
                     workspace_only_files.append(sanitized_full_name)
-                    logger.debug(f"📁 [Cloud Mode] {sanitized_full_name} stored in workspace (skipping document ContentBlock to avoid AgentCore Memory serialization error)")
+                    logger.debug(f"[Cloud Mode] {sanitized_full_name} stored in workspace (skipping document ContentBlock to avoid AgentCore Memory serialization error)")
                 else:
                     # Local mode - can send as document ContentBlock
                     doc_format = self._get_document_format(filename)
@@ -1095,7 +869,7 @@ Your goal is to be helpful, accurate, and efficient."""
                 else:
                     name_without_ext = sanitized_full_name
 
-                logger.debug(f"🔍 [DEBUG] About to add document ContentBlock: name='{name_without_ext}', format={doc_format}, original='{file.filename}'")
+                logger.debug(f"[DEBUG] About to add document ContentBlock: name='{name_without_ext}', format={doc_format}, original='{file.filename}'")
                 content_blocks.append({
                     "document": {
                         "format": doc_format,

@@ -109,9 +109,11 @@ export async function GET(request: NextRequest) {
         enabledToolIds = getLocalUserEnabledTools(userId)
         console.log(`[API] Loaded authenticated user ${userId} from local file: ${enabledToolIds.length} enabled`)
       } else {
-        // AWS: Load from DynamoDB
-        const storedTools = await getDynamoUserEnabledTools(userId)
-        const profile = await getUserProfile(userId)
+        // AWS: Load from DynamoDB (parallel fetch)
+        const [storedTools, profile] = await Promise.all([
+          getDynamoUserEnabledTools(userId),
+          getUserProfile(userId)
+        ])
 
         if (!profile) {
           // New user - initialize with all tools DISABLED (default)
