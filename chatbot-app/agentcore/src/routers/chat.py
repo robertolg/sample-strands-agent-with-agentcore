@@ -12,6 +12,8 @@ from typing import Optional, List, AsyncGenerator
 import logging
 import json
 import asyncio
+import os
+from opentelemetry import trace
 
 from models.schemas import InvocationRequest, InvocationInput
 from models.autopilot_schemas import (
@@ -397,25 +399,43 @@ def _build_directive_system_prompt(directive: Directive, base_prompt: Optional[s
 After completing the task, summarize results in 2-3 sentences only. A comprehensive response will be provided later."""
 
 
-# ============================================================
-# AgentCore Runtime Standard Endpoints (REQUIRED)
-# ============================================================
-
-@router.get("/ping")
-async def ping():
-    """Health check endpoint (required by AgentCore Runtime)"""
-    return {"status": "healthy"}
-
-
 @router.post("/invocations")
 async def invocations(request: InvocationRequest, http_request: Request):
-    """
-    AgentCore Runtime standard invocation endpoint (required)
-
-    Supports user-specific tool filtering and SSE streaming.
-    When autopilot=true, uses Mission Control orchestration.
-    """
     input_data = request.input
+
+    if input_data.warmup:
+        from datetime import datetime
+        logger.info(f"[Warmup] Container warmed - session={input_data.session_id}, user={input_data.user_id}")
+
+        memory_id = os.environ.get('MEMORY_ID')
+        if memory_id:
+            try:
+                from agent.agent import _cached_strategy_ids
+                if _cached_strategy_ids is None:
+                    import boto3
+                    import agent.agent as agent_module
+                    aws_region = os.environ.get('AWS_REGION', 'us-west-2')
+                    gmcp = boto3.client('bedrock-agentcore-control', region_name=aws_region)
+                    response = gmcp.get_memory(memoryId=memory_id)
+                    memory = response['memory']
+                    strategies = memory.get('strategies', memory.get('memoryStrategies', []))
+
+                    strategy_map = {
+                        s.get('type', s.get('memoryStrategyType', '')): s.get('strategyId', s.get('memoryStrategyId', ''))
+                        for s in strategies
+                        if s.get('type', s.get('memoryStrategyType', '')) and s.get('strategyId', s.get('memoryStrategyId', ''))
+                    }
+                    agent_module._cached_strategy_ids = strategy_map
+                    logger.info(f"[Warmup] Pre-cached {len(strategy_map)} strategy IDs")
+            except Exception as e:
+                logger.warning(f"[Warmup] Failed to pre-cache strategy IDs: {e}")
+
+        return {"status": "warm"}
+
+    span = trace.get_current_span()
+    span.set_attribute("user.id", input_data.user_id or "anonymous")
+    span.set_attribute("session.id", input_data.session_id)
+
     logger.info(f"Invocation request - Session: {input_data.session_id}, User: {input_data.user_id}")
     logger.info(f"Message: {input_data.message[:50]}...")
     logger.info(f"Autopilot: {input_data.autopilot or False}")

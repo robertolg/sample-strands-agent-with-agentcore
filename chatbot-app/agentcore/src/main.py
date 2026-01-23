@@ -30,6 +30,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Filter out /ping and /health from access logs
+class HealthCheckFilter(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        return '/ping' not in msg and '/health' not in msg
+
+logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
+
 # Suppress verbose DEBUG logging from Strands SDK bidi components
 logging.getLogger("strands.experimental.bidi").setLevel(logging.WARNING)
 

@@ -912,6 +912,11 @@ async function sendResponse(event, status, data, reason) {
         BROWSER_NAME: browserCustomName,
         CODE_INTERPRETER_ID: codeInterpreter.attrCodeInterpreterId,
         DOCUMENT_BUCKET: documentBucket.bucketName,
+        // OpenTelemetry observability configuration
+        AGENT_OBSERVABILITY_ENABLED: 'true',
+        OTEL_PYTHON_DISTRO: 'aws_distro',
+        OTEL_PYTHON_CONFIGURATOR: 'aws_configurator',
+        OTEL_LOGS_EXPORTER: 'none',
       },
 
       tags: {

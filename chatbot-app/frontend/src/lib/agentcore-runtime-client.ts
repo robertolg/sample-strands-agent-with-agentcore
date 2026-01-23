@@ -396,6 +396,67 @@ export async function invokeAgentCoreRuntime(
   }
 }
 
+export async function pingAgentCoreRuntime(sessionId?: string, userId?: string): Promise<{
+  success: boolean
+  latencyMs: number
+  mode: 'local' | 'aws'
+  error?: string
+}> {
+  const startTime = Date.now()
+  console.log(`[AgentCore Warmup] Starting (IS_LOCAL=${IS_LOCAL})`)
+
+  try {
+    if (IS_LOCAL) {
+      console.log(`[AgentCore Warmup] Local mode: GET ${AGENTCORE_URL}/ping`)
+      const response = await fetch(`${AGENTCORE_URL}/ping`, { method: 'GET' })
+      const latencyMs = Date.now() - startTime
+      if (!response.ok) throw new Error(`Ping failed: ${response.status}`)
+      console.log(`[AgentCore Warmup] Local ping success: ${latencyMs}ms`)
+      return { success: true, latencyMs, mode: 'local' }
+    }
+
+    console.log('[AgentCore Warmup] AWS mode: initializing clients')
+    await initializeAwsClients()
+    const runtimeArn = await getAgentCoreRuntimeArn()
+    console.log(`[AgentCore Warmup] Runtime ARN: ${runtimeArn}`)
+
+    const warmupSessionId = sessionId || `warmup00_${Date.now().toString(36)}_${crypto.randomUUID().replace(/-/g, '')}`
+    const warmupUserId = userId || 'anonymous'
+    console.log(`[AgentCore Warmup] Invoking with sessionId=${warmupSessionId}, userId=${warmupUserId}`)
+
+    const payload = {
+      input: {
+        user_id: warmupUserId,
+        session_id: warmupSessionId,
+        message: '',
+        warmup: true
+      }
+    }
+
+    const command = new InvokeAgentRuntimeCommand({
+      agentRuntimeArn: runtimeArn,
+      qualifier: 'DEFAULT',
+      contentType: 'application/json',
+      payload: Buffer.from(JSON.stringify(payload)),
+      runtimeSessionId: warmupSessionId,
+      runtimeUserId: warmupUserId,
+    })
+
+    const response = await agentCoreClient.send(command)
+    const latencyMs = Date.now() - startTime
+    console.log(`[AgentCore Warmup] AWS invoke success: ${latencyMs}ms, traceId=${response.traceId}`)
+    return { success: true, latencyMs, mode: 'aws' }
+  } catch (error) {
+    const latencyMs = Date.now() - startTime
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+    console.error(`[AgentCore Warmup] Failed after ${latencyMs}ms: ${errorMsg}`)
+    if (error instanceof Error && error.stack) {
+      console.error(`[AgentCore Warmup] Stack: ${error.stack}`)
+    }
+    return { success: false, latencyMs, mode: IS_LOCAL ? 'local' : 'aws', error: errorMsg }
+  }
+}
+
 /**
  * Health check - validates AgentCore configuration
  */

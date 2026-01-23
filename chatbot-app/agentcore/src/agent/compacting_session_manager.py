@@ -2,59 +2,6 @@
 Compacting Session Manager for Long Context Optimization
 
 Simplified two-feature compaction with DynamoDB checkpoint persistence.
-
-## Architecture
-
-Compaction state is stored in DynamoDB session metadata:
-```
-{
-    "compaction": {
-        "checkpoint": 0,            # Message index to load from (0 = load all)
-        "summary": null,            # Compressed history summary (for messages before checkpoint)
-        "lastInputTokens": 0,       # Last turn's actual input tokens
-        "updatedAt": null
-    }
-}
-```
-
-## Two Independent Features
-
-Feature 1: Truncation (Always Applied)
-- Truncates long tool inputs/results in OLD messages
-- Protects recent N turns (default: 2) from truncation
-- Applied every turn, no threshold
-- Cache-friendly: message structure preserved
-
-Feature 2: Checkpoint (100K+ tokens)
-- When input_tokens > token_threshold (100K):
-  - Set checkpoint to safe cutoff index
-  - Generate summary of messages before checkpoint
-  - Save both to DynamoDB
-- Next turn: Load messages[checkpoint:] + prepend summary
-- If tokens exceed 100K again: Move checkpoint forward, update summary
-
-## Flow
-
-1. Turn Start (initialize):
-   - Load compaction state from DynamoDB
-   - Load ALL messages from Session Memory (for caching valid cutoff points)
-   - If checkpoint > 0: Use messages[checkpoint:] + prepend summary
-   - Else: Use all messages
-   - Cache valid cutoff points (user text messages) for update_after_turn
-   - Apply truncation to old tool contents (protect recent 2 turns)
-
-2. Turn End (update_after_turn):
-   - Update lastInputTokens
-   - If input_tokens > 100K:
-     - Use cached valid cutoff points (no Session Memory query)
-     - Find checkpoint (keeps recent N turns)
-     - Generate summary from cached messages + save to DynamoDB
-
-## Configuration
-
-- token_threshold: Trigger checkpoint when input tokens exceed this (default: 100,000)
-- protected_turns: Number of recent turns to protect from truncation and keep after checkpoint (default: 2)
-- max_tool_content_length: Max chars for tool content truncation (default: 500)
 """
 
 import copy
@@ -65,13 +12,26 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional, Dict, List
+
+from strands.hooks import MessageAddedEvent
+from strands.hooks.events import AfterInvocationEvent, AgentInitializedEvent
+from strands.hooks.registry import HookRegistry
+from strands.types.session import Session, SessionAgent, SessionMessage
+from typing_extensions import override
+
 from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
 from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
+from bedrock_agentcore.memory.integrations.strands.bedrock_converter import AgentCoreMemoryConverter
 
 if TYPE_CHECKING:
     from strands.agent.agent import Agent
 
 logger = logging.getLogger(__name__)
+
+# Payload type markers for unified storage
+PAYLOAD_TYPE_MESSAGE = "message"
+PAYLOAD_TYPE_AGENT_STATE = "agent_state"
+PAYLOAD_TYPE_SESSION = "session"
 
 
 @dataclass
@@ -140,6 +100,7 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
         user_id: Optional[str] = None,
         summarization_strategy_id: Optional[str] = None,
         metrics_only: bool = False,
+        enable_api_optimization: bool = True,
         **kwargs: Any,
     ):
         """
@@ -154,6 +115,8 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
             user_id: User ID for DynamoDB operations
             summarization_strategy_id: Strategy ID for LTM summarization (optional)
             metrics_only: If True, only track metrics without applying compaction (for baseline testing)
+            enable_api_optimization: If True (default), use unified actorId + batch storage for reduced API calls.
+                                     If False, use original separate callbacks (for A/B testing).
             **kwargs: Additional arguments passed to parent
         """
         super().__init__(
@@ -169,6 +132,7 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
         self.region_name = region_name
         self.summarization_strategy_id = summarization_strategy_id
         self.metrics_only = metrics_only
+        self.enable_api_optimization = enable_api_optimization
 
         # Current compaction state (loaded from DynamoDB in initialize)
         self.compaction_state: Optional[CompactionState] = None
@@ -184,18 +148,369 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
         # All messages loaded at initialize (for summary generation)
         self._all_messages_for_summary: List[Dict] = []
 
+        # Track last synced state to avoid redundant API calls (API optimization)
+        self._last_synced_state: Dict[str, dict] = {}
+
+        # API call metrics for performance measurement
+        self._api_call_count = 0
+        self._api_call_total_ms = 0.0
+
         mode_str = "metrics_only" if metrics_only else "full_compaction"
-        logger.debug(
-            f"✅ CompactingSessionManager initialized: "
-            f"mode={mode_str}, "
-            f"token_threshold={token_threshold:,}, "
-            f"protected_turns={protected_turns}, "
-            f"max_tool_content={max_tool_content_length}"
+        api_mode = "optimized" if enable_api_optimization else "legacy"
+        logger.debug(f"CompactingSessionManager: mode={mode_str}, api={api_mode}")
+
+    def reset_api_metrics(self):
+        """Reset API call metrics."""
+        self._api_call_count = 0
+        self._api_call_total_ms = 0.0
+
+    def get_api_metrics(self) -> Dict[str, Any]:
+        """Get API call metrics."""
+        return {
+            "api_call_count": self._api_call_count,
+            "api_call_total_ms": self._api_call_total_ms,
+        }
+
+    def _track_api_call(self, func, *args, **kwargs):
+        """Execute function and track API call metrics."""
+        import time
+        start = time.time()
+        result = func(*args, **kwargs)
+        elapsed_ms = (time.time() - start) * 1000
+        self._api_call_count += 1
+        self._api_call_total_ms += elapsed_ms
+        return result
+
+    @override
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        """Register hooks for session management.
+
+        Behavior depends on `enable_api_optimization`:
+        - True (default): Unified actorId + batch storage (2 API calls per turn instead of 7+)
+        - False (legacy): Separate callbacks matching parent implementation (for A/B testing)
+        """
+        if self.enable_api_optimization:
+            self._register_optimized_hooks(registry, **kwargs)
+        else:
+            self._register_legacy_hooks(registry, **kwargs)
+
+    def _register_optimized_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        """Register optimized hooks - single callback saves message+state in one API call."""
+
+        registry.add_callback(AgentInitializedEvent, lambda event: self.initialize(event.agent))
+        registry.add_callback(MessageAddedEvent, lambda event: self.save_message_with_state(event.message, event.agent))
+        registry.add_callback(MessageAddedEvent, lambda event: self.retrieve_customer_context(event))
+        registry.add_callback(AfterInvocationEvent, lambda event: self._sync_if_conversation_manager_changed(event.agent))
+
+    def _register_legacy_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        """Register legacy hooks - separate callbacks for A/B testing comparison."""
+        registry.add_callback(AgentInitializedEvent, lambda event: self.initialize(event.agent))
+        registry.add_callback(MessageAddedEvent, lambda event: self._append_message_tracked(event.message, event.agent))
+        registry.add_callback(MessageAddedEvent, lambda event: self._sync_agent_tracked(event.agent))
+        registry.add_callback(MessageAddedEvent, lambda event: self.retrieve_customer_context(event))
+        registry.add_callback(AfterInvocationEvent, lambda event: self._sync_agent_tracked(event.agent))
+
+    def _append_message_tracked(self, message: Dict, agent: "Agent") -> None:
+        """Append message with API call tracking."""
+        start = time.time()
+        super().append_message(message, agent)
+        elapsed_ms = (time.time() - start) * 1000
+        self._api_call_count += 1
+        self._api_call_total_ms += elapsed_ms
+
+    def _sync_agent_tracked(self, agent: "Agent") -> None:
+        """Sync agent with API call tracking."""
+        start = time.time()
+        super().sync_agent(agent)
+        elapsed_ms = (time.time() - start) * 1000
+        self._api_call_count += 1
+        self._api_call_total_ms += elapsed_ms
+
+    def save_message_with_state(self, message: Dict, agent: "Agent") -> None:
+        """Save message and agent state in a single API call using unified actorId."""
+        session_message = SessionMessage.from_message(message, 0)
+        message_payloads = AgentCoreMemoryConverter.message_to_payload(session_message)
+
+        if not message_payloads:
+            return
+
+        session_agent = SessionAgent.from_agent(agent)
+        agent_data = session_agent.to_dict()
+        agent_data["_payload_type"] = PAYLOAD_TYPE_AGENT_STATE
+        agent_data["_agent_id"] = agent.agent_id
+
+        payloads = []
+        message_tuple = message_payloads[0]
+        message_data = json.loads(message_tuple[0])
+        message_data["_payload_type"] = PAYLOAD_TYPE_MESSAGE
+
+        if not AgentCoreMemoryConverter.exceeds_conversational_limit(message_tuple):
+            payloads.append({
+                "conversational": {
+                    "content": {"text": json.dumps(message_data)},
+                    "role": message_tuple[1].upper(),
+                }
+            })
+        else:
+            payloads.append({"blob": json.dumps(message_data)})
+
+        payloads.append({"blob": json.dumps(agent_data)})
+
+        event = self._track_api_call(
+            self.memory_client.gmdp_client.create_event,
+            memoryId=self.config.memory_id,
+            actorId=self.config.actor_id,
+            sessionId=self.session_id,
+            payload=payloads,
+            eventTimestamp=self._get_monotonic_timestamp(),
         )
 
-    # ============================================
-    # DynamoDB Compaction State Operations
-    # ============================================
+        event_id = event.get("event", {}).get("eventId")
+        session_message = SessionMessage.from_message(message, event_id)
+        self._latest_agent_message[agent.agent_id] = session_message
+        self._last_synced_state[agent.agent_id] = agent_data
+
+    def _sync_if_conversation_manager_changed(self, agent: "Agent") -> None:
+        """Sync agent state only if conversation_manager state changed."""
+        current_state = SessionAgent.from_agent(agent).to_dict()
+        last_state = self._last_synced_state.get(agent.agent_id)
+
+        if last_state is None:
+            return
+
+        current_cm_state = current_state.get("conversation_manager_state", {})
+        last_cm_state = last_state.get("conversation_manager_state", {})
+
+        if current_cm_state != last_cm_state:
+            self._save_agent_state_only(agent)
+
+    def _save_agent_state_only(self, agent: "Agent") -> None:
+        """Save only agent state (for AfterInvocationEvent when CM state changed)."""
+        session_agent = SessionAgent.from_agent(agent)
+        agent_data = session_agent.to_dict()
+        agent_data["_payload_type"] = PAYLOAD_TYPE_AGENT_STATE
+        agent_data["_agent_id"] = agent.agent_id
+
+        self.memory_client.gmdp_client.create_event(
+            memoryId=self.config.memory_id,
+            actorId=self.config.actor_id,
+            sessionId=self.session_id,
+            payload=[{"blob": json.dumps(agent_data)}],
+            eventTimestamp=self._get_monotonic_timestamp(),
+        )
+        self._last_synced_state[agent.agent_id] = agent_data
+
+    @override
+    def list_messages(
+        self,
+        session_id: str,
+        agent_id: str,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        **kwargs: Any,
+    ) -> List[SessionMessage]:
+        """List messages - tries unified format first, falls back to legacy."""
+        messages = self._list_messages_unified(session_id, limit, offset)
+        if messages:
+            return messages
+        return super().list_messages(session_id, agent_id, limit, offset, **kwargs)
+
+    def _list_messages_unified(
+        self,
+        session_id: str,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[SessionMessage]:
+        """List messages from unified storage format."""
+        max_results = (limit + offset) if limit else 10000
+
+        events = self.memory_client.list_events(
+            memory_id=self.config.memory_id,
+            actor_id=self.config.actor_id,
+            session_id=session_id,
+            max_results=max_results,
+        )
+
+        messages = []
+        for event in events:
+            for payload_item in event.get("payload", []):
+                msg = self._parse_message_from_payload(payload_item)
+                if msg:
+                    messages.append(msg)
+
+        # Reverse to chronological order (list_events returns newest first)
+        messages = list(reversed(messages))
+
+        # Apply offset and limit
+        if limit is not None:
+            return messages[offset : offset + limit]
+        return messages[offset:]
+
+    @staticmethod
+    def _filter_empty_text(message: dict) -> dict:
+        """Filter out empty text blocks from message content."""
+        if "content" not in message:
+            return message
+        content = message.get("content", [])
+        if not isinstance(content, list):
+            return message
+        filtered = [block for block in content if not (isinstance(block, dict) and block.get("text") == "")]
+        return {**message, "content": filtered}
+
+    def _parse_message_from_payload(self, payload_item: dict) -> Optional[SessionMessage]:
+        """Parse a message from a payload item."""
+        try:
+            if "conversational" in payload_item:
+                conv = payload_item["conversational"]
+                data = json.loads(conv["content"]["text"])
+
+                if data.get("_payload_type") == PAYLOAD_TYPE_MESSAGE or "message" in data:
+                    data.pop("_payload_type", None)
+                    session_msg = SessionMessage.from_dict(data)
+                    session_msg.message = self._filter_empty_text(session_msg.message)
+                    if session_msg.message.get("content"):
+                        return session_msg
+
+            elif "blob" in payload_item:
+                blob_data = json.loads(payload_item["blob"])
+
+                if isinstance(blob_data, dict):
+                    if blob_data.get("_payload_type") == PAYLOAD_TYPE_AGENT_STATE:
+                        return None
+                    if blob_data.get("_payload_type") == PAYLOAD_TYPE_MESSAGE:
+                        blob_data.pop("_payload_type", None)
+                        session_msg = SessionMessage.from_dict(blob_data)
+                        session_msg.message = self._filter_empty_text(session_msg.message)
+                        if session_msg.message.get("content"):
+                            return session_msg
+
+                # Legacy blob format (tuple)
+                if isinstance(blob_data, (tuple, list)) and len(blob_data) == 2:
+                    session_msg = SessionMessage.from_dict(json.loads(blob_data[0]))
+                    session_msg.message = self._filter_empty_text(session_msg.message)
+                    if session_msg.message.get("content"):
+                        return session_msg
+
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            logger.debug(f"Failed to parse message from payload: {e}")
+
+        return None
+
+    @override
+    def read_agent(self, session_id: str, agent_id: str, **kwargs: Any) -> Optional[SessionAgent]:
+        """Read agent with dual-read support.
+
+        Tries unified format first, falls back to legacy format.
+        """
+        # Try unified format first
+        agent = self._read_agent_unified(session_id, agent_id)
+
+        if agent:
+            return agent
+
+        # Fallback to legacy format
+        logger.debug("No unified agent found, falling back to legacy format")
+        return super().read_agent(session_id, agent_id, **kwargs)
+
+    def _read_agent_unified(self, session_id: str, agent_id: str) -> Optional[SessionAgent]:
+        """Read agent state from unified storage format."""
+        events = self.memory_client.list_events(
+            memory_id=self.config.memory_id,
+            actor_id=self.config.actor_id,
+            session_id=session_id,
+            max_results=100,
+        )
+
+        # Find latest agent state for this agent_id
+        for event in events:
+            for payload_item in event.get("payload", []):
+                if "blob" in payload_item:
+                    try:
+                        blob_data = json.loads(payload_item["blob"])
+                        if (
+                            isinstance(blob_data, dict)
+                            and blob_data.get("_payload_type") == PAYLOAD_TYPE_AGENT_STATE
+                            and blob_data.get("_agent_id") == agent_id
+                        ):
+                            blob_data.pop("_payload_type", None)
+                            blob_data.pop("_agent_id", None)
+                            return SessionAgent.from_dict(blob_data)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+        return None
+
+    @override
+    def create_session(self, session: Session, **kwargs: Any) -> Session:
+        """Create session in unified format (under config.actor_id)."""
+        session_data = session.to_dict()
+        session_data["_payload_type"] = PAYLOAD_TYPE_SESSION
+
+        self.memory_client.gmdp_client.create_event(
+            memoryId=self.config.memory_id,
+            actorId=self.config.actor_id,  # Unified actorId
+            sessionId=self.session_id,
+            payload=[{"blob": json.dumps(session_data)}],
+            eventTimestamp=self._get_monotonic_timestamp(),
+        )
+
+        logger.info(f"Created session (unified): {session.session_id}")
+        return session
+
+    @override
+    def create_agent(self, session_id: str, session_agent: SessionAgent, **kwargs: Any) -> None:
+        """Create agent in unified format (under config.actor_id)."""
+        agent_data = session_agent.to_dict()
+        agent_data["_payload_type"] = PAYLOAD_TYPE_AGENT_STATE
+        agent_data["_agent_id"] = session_agent.agent_id
+
+        self.memory_client.gmdp_client.create_event(
+            memoryId=self.config.memory_id,
+            actorId=self.config.actor_id,  # Unified actorId
+            sessionId=self.session_id,
+            payload=[{"blob": json.dumps(agent_data)}],
+            eventTimestamp=self._get_monotonic_timestamp(),
+        )
+
+        self._last_synced_state[session_agent.agent_id] = agent_data
+        logger.info(f"Created agent (unified): {session_agent.agent_id}")
+
+    @override
+    def read_session(self, session_id: str, **kwargs: Any) -> Optional[Session]:
+        """Read session with dual-read support."""
+        # Try unified format first
+        session = self._read_session_unified(session_id)
+
+        if session:
+            return session
+
+        # Fallback to legacy format
+        return super().read_session(session_id, **kwargs)
+
+    def _read_session_unified(self, session_id: str) -> Optional[Session]:
+        """Read session from unified storage format."""
+        events = self.memory_client.list_events(
+            memory_id=self.config.memory_id,
+            actor_id=self.config.actor_id,
+            session_id=session_id,
+            max_results=50,
+        )
+
+        for event in events:
+            for payload_item in event.get("payload", []):
+                if "blob" in payload_item:
+                    try:
+                        blob_data = json.loads(payload_item["blob"])
+                        if (
+                            isinstance(blob_data, dict)
+                            and blob_data.get("_payload_type") == PAYLOAD_TYPE_SESSION
+                        ):
+                            blob_data.pop("_payload_type", None)
+                            return Session.from_dict(blob_data)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+        return None
 
     def _get_dynamodb_table(self):
         """Lazy initialization of DynamoDB table."""
@@ -239,7 +554,7 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
                 state = CompactionState.from_dict(response['Item']['compaction'])
                 if state.checkpoint > 0:
                     logger.debug(
-                        f"📍 Compaction state loaded: "
+                        f" Compaction state loaded: "
                         f"checkpoint={state.checkpoint}, lastTokens={state.lastInputTokens:,}"
                     )
                 return state
@@ -272,16 +587,12 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
                 }
             )
             logger.debug(
-                f"📍 Compaction state saved: "
+                f" Compaction state saved: "
                 f"checkpoint={state.checkpoint}, lastTokens={state.lastInputTokens:,}"
             )
 
         except Exception as e:
             logger.error(f"Error setting checkpoint: {e}")
-
-    # ============================================
-    # Summary Retrieval from LTM
-    # ============================================
 
     def _get_summarization_strategy_id(self) -> Optional[str]:
         """
@@ -302,8 +613,8 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
             strategies = memory.get('strategies', memory.get('memoryStrategies', []))
 
             for strategy in strategies:
-                strategy_type = strategy.get('type', strategy.get('memoryStrategyType', ''))
-                if strategy_type == 'SUMMARIZATION':
+                strategy_payload_type = strategy.get('type', strategy.get('memoryStrategyType', ''))
+                if strategy_payload_type == 'SUMMARIZATION':
                     strategy_id = strategy.get('strategyId', strategy.get('memoryStrategyId', ''))
                     logger.debug(f"Found SUMMARIZATION strategy: {strategy_id}")
                     self.summarization_strategy_id = strategy_id
@@ -395,13 +706,13 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
             for block in content:
                 if isinstance(block, dict) and 'text' in block:
                     block['text'] = summary_prefix + block['text']
-                    logger.debug("✅ Summary prepended to first user message")
+                    logger.debug(" Summary prepended to first user message")
                     return modified_messages
 
         # No text block found - add one at the beginning
         content.insert(0, {'text': summary_prefix.rstrip()})
         first_msg['content'] = content
-        logger.debug("✅ Summary added as new text block in first user message")
+        logger.debug(" Summary added as new text block in first user message")
 
         return modified_messages
 
@@ -571,7 +882,7 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
 
         if truncation_count > 0:
             logger.debug(
-                f"✂️ Stage 1 Truncation: {truncation_count} items truncated (text/json/images), "
+                f" Stage 1 Truncation: {truncation_count} items truncated (text/json/images), "
                 f"~{total_chars_saved} chars/bytes saved"
             )
 
@@ -661,11 +972,10 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
             if prepend_messages is None:
                 prepend_messages = []
 
-            # Load ALL messages from Session Memory (fetch_all=True handles pagination)
+            # Load ALL messages from Session Memory (limit=None fetches all)
             all_session_messages = self.session_repository.list_messages(
                 session_id=self.session_id,
                 agent_id=agent.agent_id,
-                fetch_all=True,
             )
 
             # Update latest message tracking
@@ -676,23 +986,14 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
             self._total_message_count_at_init = len(all_session_messages)
 
             if self.metrics_only:
-                # ============================================
                 # Metrics-only mode: Load all messages without compaction
-                # Used for baseline testing with token tracking
-                # ============================================
-                self.compaction_state = CompactionState()  # Empty state
+                self.compaction_state = CompactionState()
                 self._valid_cutoff_message_ids = []
                 self._all_messages_for_summary = []
-
-                # Use all messages without any modification
                 messages_to_process = [sm.to_message() for sm in all_session_messages]
                 original_message_count = len(messages_to_process)
-
                 agent.messages = prepend_messages + messages_to_process
 
-                logger.debug(f"📊 Metrics-only mode: loaded {len(messages_to_process)} messages (no compaction)")
-
-                # Store info for metrics collection (no compaction applied)
                 compaction_overhead_ms = (time.time() - compaction_start_time) * 1000
                 self.last_init_info = {
                     "stage": "metrics_only",
@@ -702,62 +1003,26 @@ class CompactingSessionManager(AgentCoreMemorySessionManager):
                     "compaction_overhead_ms": compaction_overhead_ms,
                 }
             else:
-                # ============================================
                 # Full compaction mode
-                # ============================================
-                # Load compaction state from DynamoDB
                 self.compaction_state = self.load_compaction_state()
-
-                # Calculate effective offset for message loading
-                # Combine conversation_manager's removed_message_count with our checkpoint
                 conv_manager_offset = agent.conversation_manager.removed_message_count
                 checkpoint = self.compaction_state.checkpoint
-
-                # Effective offset = max of conversation manager offset and our checkpoint
-                # This ensures we load messages from the later of the two
                 effective_offset = max(conv_manager_offset, checkpoint)
 
-                logger.debug(
-                    f"📊 Session state: checkpoint={checkpoint}, "
-                    f"conv_manager_offset={conv_manager_offset}, effective_offset={effective_offset}, "
-                    f"lastInputTokens={self.compaction_state.lastInputTokens:,}"
-                )
-
                 stage = "none"
-
-                # Cache valid cutoff points for update_after_turn
                 self._valid_cutoff_message_ids = []
                 self._all_messages_for_summary = [sm.to_message() for sm in all_session_messages]
 
-                # Note: AgentCore Memory SDK stores message_id=0 for all messages (bug in append_message).
-                # We use enumeration index instead of sm.message_id for checkpoint tracking.
                 for idx, sm in enumerate(all_session_messages):
                     msg = sm.to_message()
                     if msg.get('role') == 'user' and not self._has_tool_result(msg):
                         self._valid_cutoff_message_ids.append(idx)
 
-                logger.debug(
-                    f"📊 Cached {len(self._valid_cutoff_message_ids)} valid cutoff points, "
-                    f"total {self._total_message_count_at_init} messages"
-                )
-
-                # Apply offset to get messages to process (using index since message_id is always 0)
-                if effective_offset > 0:
-                    session_messages = all_session_messages[effective_offset:]
-                else:
-                    session_messages = all_session_messages
-
-                # Convert to dict format
+                session_messages = all_session_messages[effective_offset:] if effective_offset > 0 else all_session_messages
                 messages_to_process = [sm.to_message() for sm in session_messages]
                 original_message_count = len(messages_to_process)
 
                 if checkpoint > 0 and effective_offset >= checkpoint:
-                    logger.debug(
-                        f"🔄 Checkpoint loading: offset={effective_offset}, "
-                        f"loaded {len(messages_to_process)} messages (skipped {effective_offset})"
-                    )
-
-                    # Prepend stored summary to first user message
                     if self.compaction_state.summary and messages_to_process:
                         summary_prefix = f"""<conversation_summary>
 The following is a summary of our previous conversation:
@@ -769,39 +1034,20 @@ Please continue the conversation with this context in mind.
 
 """
                         messages_to_process = self._prepend_summary_to_first_message(messages_to_process, summary_prefix)
-                        logger.debug(f"✅ Summary prepended to first user message")
-
                     stage = "checkpoint"
-                else:
-                    logger.debug(f"📝 Loaded {len(messages_to_process)} messages (offset={effective_offset})")
 
-                # ============================================
-                # Feature 2: Truncation (always applied in full compaction mode)
-                # ============================================
-                # Find protected message indices (recent N turns)
-                protected_indices = self._find_protected_message_indices(
-                    messages_to_process,
-                    self.protected_turns
-                )
-
-                # Apply truncation to old messages (protect recent turns)
+                # Apply truncation
+                protected_indices = self._find_protected_message_indices(messages_to_process, self.protected_turns)
                 truncated_messages, truncation_count, chars_saved = self._truncate_tool_contents(
-                    messages_to_process,
-                    protected_indices=protected_indices
+                    messages_to_process, protected_indices=protected_indices
                 )
 
                 if truncation_count > 0:
-                    logger.debug(
-                        f"✂️ Truncation applied: {truncation_count} items, ~{chars_saved:,} chars saved"
-                    )
                     stage = "checkpoint+truncation" if stage == "checkpoint" else "truncation"
 
                 agent.messages = prepend_messages + truncated_messages
-
-                # Calculate compaction overhead time
                 compaction_overhead_ms = (time.time() - compaction_start_time) * 1000
 
-                # Store info for external metrics collection
                 self.last_init_info = {
                     "stage": stage,
                     "original_messages": original_message_count,
@@ -841,17 +1087,17 @@ Please continue the conversation with this context in mind.
 
         # In metrics_only mode, skip compaction logic and DynamoDB save
         if self.metrics_only:
-            logger.debug(f"📊 Metrics-only: context_tokens={input_tokens:,} (no compaction)")
+            logger.debug(f" Metrics-only: context_tokens={input_tokens:,} (no compaction)")
             return
 
         # Check if checkpoint should be set or updated
         if input_tokens > self.token_threshold:
-            logger.info(f"🔍 Threshold exceeded: {input_tokens:,} > {self.token_threshold:,}")
-            logger.info(f"🔍 Cached cutoff points: {len(self._valid_cutoff_message_ids)}, protected_turns: {self.protected_turns}")
+            logger.info(f" Threshold exceeded: {input_tokens:,} > {self.token_threshold:,}")
+            logger.info(f" Cached cutoff points: {len(self._valid_cutoff_message_ids)}, protected_turns: {self.protected_turns}")
 
             # Use cached valid cutoff points from initialize()
             if not self._valid_cutoff_message_ids:
-                logger.info("⚠️ No valid cutoff points cached, skipping checkpoint update")
+                logger.info(" No valid cutoff points cached, skipping checkpoint update")
                 self.save_compaction_state(self.compaction_state)
                 return
 
@@ -860,7 +1106,7 @@ Please continue the conversation with this context in mind.
             # Need at least protected_turns + 1 turns to make a cutoff
             if total_turns <= self.protected_turns:
                 logger.debug(
-                    f"⚠️ Only {total_turns} turns available (need > {self.protected_turns}), "
+                    f" Only {total_turns} turns available (need > {self.protected_turns}), "
                     f"keeping all messages"
                 )
                 self.save_compaction_state(self.compaction_state)
@@ -870,12 +1116,12 @@ Please continue the conversation with this context in mind.
             new_checkpoint = self._valid_cutoff_message_ids[-(self.protected_turns)]
             current_checkpoint = self.compaction_state.checkpoint
 
-            logger.info(f"🔍 Cutoff IDs: {self._valid_cutoff_message_ids}, new_checkpoint={new_checkpoint}, current={current_checkpoint}")
+            logger.info(f" Cutoff IDs: {self._valid_cutoff_message_ids}, new_checkpoint={new_checkpoint}, current={current_checkpoint}")
 
             # Only update if new checkpoint is further ahead
             if new_checkpoint > current_checkpoint:
                 logger.info(
-                    f"🔄 Checkpoint update: {input_tokens:,} tokens > {self.token_threshold:,} threshold, "
+                    f" Checkpoint update: {input_tokens:,} tokens > {self.token_threshold:,} threshold, "
                     f"checkpoint {current_checkpoint} → {new_checkpoint}"
                 )
 
@@ -890,7 +1136,7 @@ Please continue the conversation with this context in mind.
                 self.compaction_state.summary = summary
 
                 logger.debug(
-                    f"✅ Checkpoint updated: {new_checkpoint}, "
+                    f" Checkpoint updated: {new_checkpoint}, "
                     f"summary_length={len(summary) if summary else 0}"
                 )
 
@@ -921,7 +1167,7 @@ Please continue the conversation with this context in mind.
         summaries = self._retrieve_session_summaries()
         if summaries:
             combined = "\n\n".join(summaries)
-            logger.debug(f"📋 Retrieved {len(summaries)} summaries from LTM for compaction")
+            logger.debug(f" Retrieved {len(summaries)} summaries from LTM for compaction")
             return combined
 
         # Fallback: extract key points from messages (simple approach)
@@ -945,7 +1191,7 @@ Please continue the conversation with this context in mind.
             if key_points:
                 # Limit to last 10 key points
                 new_summary = "Previous conversation topics:\n" + "\n".join(key_points[-10:])
-                logger.debug(f"📝 Generated fallback summary with {len(key_points)} key points")
+                logger.debug(f" Generated fallback summary with {len(key_points)} key points")
                 return new_summary
 
         except Exception as e:

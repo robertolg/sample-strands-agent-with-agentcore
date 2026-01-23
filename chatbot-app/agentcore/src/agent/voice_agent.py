@@ -186,7 +186,6 @@ class VoiceChatbotAgent:
                 session_messages = repo.list_messages(
                     session_id=self.session_id,
                     agent_id=self.TEXT_AGENT_ID,
-                    fetch_all=True,
                 )
 
                 if session_messages:

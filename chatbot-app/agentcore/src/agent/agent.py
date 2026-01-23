@@ -45,10 +45,11 @@ from agent.tool_filter import filter_tools
 
 logger = logging.getLogger(__name__)
 
-
-
 # Global stream processor instance
 _global_stream_processor = None
+
+# Global cache for Memory Strategy IDs (loaded once per container lifecycle)
+_cached_strategy_ids: Optional[Dict[str, str]] = None
 
 def get_global_stream_processor():
     """Get the global stream processor instance"""
@@ -78,9 +79,6 @@ for tool_name in builtin_tools.__all__:
 
 class ChatbotAgent:
     """Main ChatbotAgent for Agent Core with user-specific configuration"""
-
-    # Voice agent's agent_id for loading conversation history
-    VOICE_AGENT_ID = "voice"
 
     def __init__(
         self,
@@ -265,16 +263,12 @@ class ChatbotAgent:
         return f"{project_name}-users-v2"
 
     def _get_memory_strategy_ids(self, memory_id: str, aws_region: str) -> Dict[str, str]:
-        """
-        Get Memory Strategy IDs from AgentCore Memory.
+        """Get Memory Strategy IDs from AgentCore Memory with global caching."""
+        global _cached_strategy_ids
 
-        Returns a dict mapping strategy type to strategy ID:
-        {
-            'USER_PREFERENCE': 'user_preference_extraction-xxxxx',
-            'SEMANTIC': 'semantic_fact_extraction-xxxxx',
-            'SUMMARIZATION': 'conversation_summary-xxxxx'
-        }
-        """
+        if _cached_strategy_ids is not None:
+            return _cached_strategy_ids
+
         import boto3
 
         try:
@@ -283,13 +277,14 @@ class ChatbotAgent:
             memory = response['memory']
             strategies = memory.get('strategies', memory.get('memoryStrategies', []))
 
-            strategy_map = {}
-            for s in strategies:
-                strategy_type = s.get('type', s.get('memoryStrategyType', ''))
-                strategy_id = s.get('strategyId', s.get('memoryStrategyId', ''))
-                if strategy_type and strategy_id:
-                    strategy_map[strategy_type] = strategy_id
-                    logger.debug(f"Found strategy: {strategy_type} -> {strategy_id}")
+            strategy_map = {
+                s.get('type', s.get('memoryStrategyType', '')): s.get('strategyId', s.get('memoryStrategyId', ''))
+                for s in strategies
+                if s.get('type', s.get('memoryStrategyType', '')) and s.get('strategyId', s.get('memoryStrategyId', ''))
+            }
+
+            _cached_strategy_ids = strategy_map
+            logger.info(f"[StrategyCache] Loaded {len(strategy_map)} strategy IDs: {list(strategy_map.keys())}")
 
             return strategy_map
         except Exception as e:
@@ -314,44 +309,6 @@ class ChatbotAgent:
             logger.warning(f"[ChatbotAgent] {error}")
 
         return result.tools
-
-    def _load_voice_history(self) -> List[Dict[str, Any]]:
-        """
-        Load conversation history from voice mode (agent_id="voice").
-
-        This enables text mode to have context from previous voice interactions
-        within the same session. The messages are loaded read-only and passed
-        to Agent as initial context.
-
-        Returns:
-            List of messages from voice agent, or empty list if none found
-        """
-        try:
-            # Get the underlying session repository from session manager
-            if hasattr(self.session_manager, 'session_repository'):
-                repo = self.session_manager.session_repository
-
-                # Try to read messages from voice agent (agent_id="voice")
-                session_messages = repo.list_messages(
-                    session_id=self.session_id,
-                    agent_id=self.VOICE_AGENT_ID,
-                    fetch_all=True,
-                )
-
-                if session_messages:
-                    messages = [msg.to_message() for msg in session_messages]
-                    logger.info(f"[ChatbotAgent] Loaded {len(messages)} messages from voice mode history")
-                    return messages
-                else:
-                    logger.debug("[ChatbotAgent] No voice mode history found for this session")
-                    return []
-            else:
-                logger.debug("[ChatbotAgent] Session manager does not support history loading")
-                return []
-
-        except Exception as e:
-            logger.warning(f"[ChatbotAgent] Failed to load voice history: {e}")
-            return []
 
     def create_agent(self):
         """Create Strands agent with filtered tools and session management"""
@@ -403,9 +360,6 @@ class ChatbotAgent:
                 hooks.append(conversation_hook)
                 logger.debug("Conversation caching hook enabled")
 
-            # Load voice history for conversation continuity
-            voice_history = self._load_voice_history()
-
             # Create agent with session manager, hooks, and system prompt as list of content blocks
             # Using list[SystemContentBlock] enables:
             # - Better tracking of each prompt section
@@ -418,11 +372,6 @@ class ChatbotAgent:
                 "session_manager": self.session_manager,
                 "hooks": hooks if hooks else None
             }
-
-            # Add voice history as initial messages if available
-            if voice_history:
-                agent_kwargs["messages"] = voice_history
-                logger.debug(f"Added {len(voice_history)} messages from voice mode history")
 
             # Use NullConversationManager if requested (disables Strands' default sliding window)
             if self.use_null_conversation_manager:
