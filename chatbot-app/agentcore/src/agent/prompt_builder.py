@@ -133,6 +133,9 @@ def load_tool_guidance(enabled_tools: Optional[List[str]]) -> List[str]:
     - Local mode: Load from tools-config.json (required)
     - Cloud mode: Load from DynamoDB {PROJECT_NAME}-users-v2 table (required)
 
+    Also loads shared guidance (e.g., citation instructions) when any tool
+    with usesCitation=true is enabled.
+
     Args:
         enabled_tools: List of enabled tool IDs
 
@@ -149,6 +152,8 @@ def load_tool_guidance(enabled_tools: Optional[List[str]]) -> List[str]:
     is_cloud = memory_id is not None
 
     guidance_sections = []
+    needs_citation = False  # Track if any citation-enabled tool is active
+    shared_guidance = {}  # Store shared guidance for later use
 
     # Local mode: load from tools-config.json (required)
     if not is_cloud:
@@ -162,6 +167,9 @@ def load_tool_guidance(enabled_tools: Optional[List[str]]) -> List[str]:
         with open(config_path, 'r') as f:
             tools_config = json.load(f)
 
+        # Load shared guidance
+        shared_guidance = tools_config.get('shared_guidance', {})
+
         # Check all tool categories for systemPromptGuidance
         for category in ['local_tools', 'builtin_tools', 'browser_automation', 'gateway_targets', 'agentcore_runtime_a2a']:
             if category in tools_config:
@@ -174,6 +182,11 @@ def load_tool_guidance(enabled_tools: Optional[List[str]]) -> List[str]:
                         if guidance:
                             guidance_sections.append(guidance)
                             logger.debug(f"Added guidance for tool group: {tool_id}")
+
+                        # Check if this tool needs citation
+                        if tool_group.get('usesCitation'):
+                            needs_citation = True
+                            logger.debug(f"Tool {tool_id} requires citation")
 
     # Cloud mode: load from DynamoDB (required)
     else:
@@ -198,6 +211,9 @@ def load_tool_guidance(enabled_tools: Optional[List[str]]) -> List[str]:
             tool_registry = response['Item']['toolRegistry']
             logger.debug(f"Loaded tool registry from DynamoDB: {dynamodb_table}")
 
+            # Load shared guidance
+            shared_guidance = tool_registry.get('shared_guidance', {})
+
             # Check all tool categories
             for category in ['local_tools', 'builtin_tools', 'browser_automation', 'gateway_targets', 'agentcore_runtime_a2a']:
                 if category in tool_registry:
@@ -211,9 +227,21 @@ def load_tool_guidance(enabled_tools: Optional[List[str]]) -> List[str]:
                                 guidance_sections.append(guidance)
                                 logger.debug(f"Added guidance for tool group: {tool_id}")
 
+                            # Check if this tool needs citation
+                            if tool_group.get('usesCitation'):
+                                needs_citation = True
+                                logger.debug(f"Tool {tool_id} requires citation")
+
         except ClientError as e:
             logger.error(f"DynamoDB error loading tool guidance: {e}")
             return []
+
+    # Add citation instructions if any citation-enabled tool is active
+    if needs_citation and 'citation_instructions' in shared_guidance:
+        guidance_sections.append(shared_guidance['citation_instructions'])
+        logger.info("Added citation instructions (citation-enabled tool active)")
+    elif needs_citation:
+        logger.warning("Citation needed but citation_instructions not found in shared_guidance")
 
     logger.info(f"Loaded {len(guidance_sections)} tool guidance sections")
     return guidance_sections
