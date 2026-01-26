@@ -10,6 +10,8 @@ interface StreamingTextProps {
   sessionId?: string
   /** Tool use ID for Markdown component */
   toolUseId?: string
+  /** Font size for Markdown component */
+  size?: 'sm' | 'base' | 'lg' | 'xl' | '2xl'
 }
 
 /**
@@ -25,7 +27,8 @@ export const StreamingText = React.memo<StreamingTextProps>(({
   text,
   isStreaming,
   sessionId,
-  toolUseId
+  toolUseId,
+  size = '2xl'
 }) => {
   const [displayedLength, setDisplayedLength] = useState(text.length)
   const targetLengthRef = useRef(text.length)
@@ -97,7 +100,7 @@ export const StreamingText = React.memo<StreamingTextProps>(({
   const displayedText = isStreaming ? text.slice(0, displayedLength) : text
 
   return (
-    <Markdown sessionId={sessionId} toolUseId={toolUseId} preserveLineBreaks>
+    <Markdown sessionId={sessionId} toolUseId={toolUseId} size={size} preserveLineBreaks>
       {displayedText}
     </Markdown>
   )
@@ -106,6 +109,7 @@ export const StreamingText = React.memo<StreamingTextProps>(({
   if (prevProps.isStreaming !== nextProps.isStreaming) return false
   if (prevProps.sessionId !== nextProps.sessionId) return false
   if (prevProps.toolUseId !== nextProps.toolUseId) return false
+  if (prevProps.size !== nextProps.size) return false
   return true
 })
 

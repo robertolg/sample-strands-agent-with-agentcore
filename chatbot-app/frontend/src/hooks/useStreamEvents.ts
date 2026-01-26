@@ -1,7 +1,7 @@
 import { useCallback, useRef, startTransition } from 'react'
 import { flushSync } from 'react-dom'
 import { Message, ToolExecution } from '@/types/chat'
-import { StreamEvent, ChatSessionState, ChatUIState, WorkspaceFile, SWARM_AGENT_DISPLAY_NAMES } from '@/types/events'
+import { StreamEvent, ChatSessionState, ChatUIState, WorkspaceFile, SWARM_AGENT_DISPLAY_NAMES, SwarmAgentStep } from '@/types/events'
 import { useMetadataTracking } from './useMetadataTracking'
 import { useTextBuffer } from './useTextBuffer'
 import { A2A_TOOLS_REQUIRING_POLLING, isA2ATool, getAgentStatusForTool } from './usePolling'
@@ -47,17 +47,7 @@ export const useStreamEvents = ({
   const swarmModeRef = useRef<{
     isActive: boolean
     nodeHistory: string[]
-    agentSteps: Array<{
-      nodeId: string
-      displayName: string
-      description?: string
-      startTime: number
-      endTime?: number
-      toolCalls?: Array<{ toolName: string; status: 'running' | 'completed' | 'failed' }>
-      status: 'running' | 'completed' | 'failed'
-      responseText?: string
-      reasoningText?: string
-    }>
+    agentSteps: SwarmAgentStep[]
   }>({ isActive: false, nodeHistory: [], agentSteps: [] })
 
   // Latency tracking hook (encapsulates all latency-related refs and logic)

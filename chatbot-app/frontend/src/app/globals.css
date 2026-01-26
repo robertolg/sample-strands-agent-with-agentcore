@@ -7,7 +7,7 @@
 /* Prevent FOUC - Initial loading screen with smooth transition */
 @layer base {
   body {
-    @apply bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800;
+    @apply bg-white dark:bg-black;
   }
 
   /* Hide content until React hydrates */
@@ -123,7 +123,7 @@ div[style*="position: fixed"][style*="top: 0"][style*="right: 0"][style*="z-inde
     --chart-3: 347 77% 50%;
     --chart-4: 280 87% 65%;
     --chart-5: 25 95% 53%;
-    --sidebar-background: 220 15% 96%;
+    --sidebar-background: 226 38% 94%;
     --sidebar-foreground: 220 13% 29%;
     --sidebar-primary: 0 0% 100%;
     --sidebar-primary-foreground: 220 13% 29%;
@@ -134,32 +134,32 @@ div[style*="position: fixed"][style*="top: 0"][style*="right: 0"][style*="z-inde
   }
 
   .dark {
-    --background: 222 47% 11%;
+    --background: 0 0% 0%;
     --foreground: 220 14% 96%;
-    --card: 222 47% 11%;
+    --card: 0 0% 0%;
     --card-foreground: 220 14% 96%;
-    --popover: 222 47% 11%;
+    --popover: 0 0% 7%;
     --popover-foreground: 220 14% 96%;
     --primary: 188 91% 35%;
     --primary-foreground: 0 0% 100%;
     --secondary: 214 95% 56%;
     --secondary-foreground: 0 0% 100%;
-    --muted: 217 33% 17%;
+    --muted: 0 0% 13%;
     --muted-foreground: 220 9% 64%;
     --accent: 214 95% 56%;
     --accent-foreground: 0 0% 100%;
     --destructive: 0 63% 31%;
     --destructive-foreground: 0 0% 98%;
-    --border: 217 33% 17%;
-    --input: 217 33% 17%;
+    --border: 0 0% 20%;
+    --input: 0 0% 13%;
     --ring: 188 91% 35%;
-    --sidebar-background: 222 47% 11%;
+    --sidebar-background: 0 0% 13%;
     --sidebar-foreground: 220 14% 96%;
     --sidebar-primary: 214 95% 56%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 217 33% 17%;
+    --sidebar-accent: 0 0% 20%;
     --sidebar-accent-foreground: 220 14% 96%;
-    --sidebar-border: 217 33% 17%;
+    --sidebar-border: 0 0% 20%;
     --sidebar-ring: 214 95% 56%;
     --chart-1: 220 70% 80%;
     --chart-2: 160 60% 75%;
@@ -352,6 +352,33 @@ div[style*="position: fixed"][style*="top: 0"][style*="right: 0"][style*="z-inde
 
 .chat-chart-content p {
   @apply text-base mb-4;
+}
+
+/* AI Message Typography - uses CSS custom property for font size */
+.ai-message-text {
+  font-size: var(--ai-font-size, 15px) !important;
+  line-height: 1.8 !important;
+}
+
+.ai-message-text p,
+.ai-message-text li,
+.ai-message-text strong,
+.ai-message-text em,
+.ai-message-text span,
+.ai-message-text ul,
+.ai-message-text ol {
+  font-size: var(--ai-font-size, 15px) !important;
+  line-height: 1.8 !important;
+}
+
+/* Dark mode text color for AI messages */
+.dark .ai-message-text,
+.dark .ai-message-text p,
+.dark .ai-message-text li,
+.dark .ai-message-text strong,
+.dark .ai-message-text em,
+.dark .ai-message-text span {
+  color: #E0E0E0;
 }
 
 /* Custom horizontal scrollbar for image gallery */

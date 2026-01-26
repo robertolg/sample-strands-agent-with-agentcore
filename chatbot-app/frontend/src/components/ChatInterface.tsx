@@ -22,7 +22,8 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { SidebarTrigger, SidebarInset, useSidebar } from "@/components/ui/sidebar"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Upload, Send, FileText, ImageIcon, Square, Bot, Brain, Maximize2, Minimize2, Moon, Sun, FlaskConical, Loader2, ArrowDown, Download, Mic } from "lucide-react"
+import { Upload, Send, FileText, ImageIcon, Square, Moon, Sun, Loader2, ArrowDown, Mic, FlaskConical } from "lucide-react"
+import { AIIcon } from "@/components/ui/AIIcon"
 import { ModelConfigDialog } from "@/components/ModelConfigDialog"
 import { apiGet } from "@/lib/api-client"
 import { useTheme } from "next-themes"
@@ -81,6 +82,12 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
   const sidebarContext = useSidebar()
   const { setOpen, setOpenMobile, open } = sidebarContext
   const { theme, setTheme } = useTheme()
+  const [mounted, setMounted] = useState(false)
+
+  // Prevent hydration mismatch by only rendering theme-dependent UI after mount
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   // Scroll control state
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -156,7 +163,6 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
 
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [suggestionKey, setSuggestionKey] = useState<string>("initial")
-  const [isWideMode, setIsWideMode] = useState<boolean>(false)
   const [currentModelName, setCurrentModelName] = useState<string>("")
   const [isResearchEnabled, setIsResearchEnabled] = useState<boolean>(false)
   const [isResearchModalOpen, setIsResearchModalOpen] = useState<boolean>(false)
@@ -259,13 +265,6 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
   // Helper to check if voice mode is active (derived from unified agentStatus)
   const isVoiceActive = agentStatus.startsWith('voice_')
 
-  // Load wide mode preference from localStorage
-  useEffect(() => {
-    const savedWideMode = localStorage.getItem('chatWideMode')
-    if (savedWideMode !== null) {
-      setIsWideMode(savedWideMode === 'true')
-    }
-  }, [])
 
   // Sync Research Agent state with availableTools
   useEffect(() => {
@@ -315,8 +314,9 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
   }, [availableTools, toggleTool, toggleSwarmHook])
 
   // Toggle Swarm (using hook from useChat)
-  const toggleSwarm = useCallback(() => {
-    toggleSwarmHook(!swarmEnabled)
+  const toggleSwarm = useCallback((enabled?: boolean) => {
+    const newValue = enabled !== undefined ? enabled : !swarmEnabled
+    toggleSwarmHook(newValue)
   }, [toggleSwarmHook, swarmEnabled])
 
   // Monitor messages for research_agent and browser_use_agent tool executions separately
@@ -433,11 +433,6 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     setActiveBrowserId(executionId)
     setIsBrowserModalOpen(true)
   }, [])
-
-  // Save wide mode preference to localStorage
-  useEffect(() => {
-    localStorage.setItem('chatWideMode', isWideMode.toString())
-  }, [isWideMode])
 
   // Export conversation to text file
   const exportConversation = useCallback(() => {
@@ -657,10 +652,10 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     setIsUserScrolledUp(scrolledUp)
   }, [])
 
-  // Auto-scroll on new messages (both modes now use container scroll)
+  // Auto-scroll on new messages and swarm progress updates
   useEffect(() => {
     scrollToBottom()
-  }, [groupedMessages, isTyping, scrollToBottom])
+  }, [groupedMessages, isTyping, swarmProgress, scrollToBottom])
 
   // Reset scroll state when starting new chat
   useEffect(() => {
@@ -786,6 +781,21 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
           </div>
         )}
 
+        {/* Theme toggle - Always visible in top-right */}
+        {groupedMessages.length === 0 && mounted && (
+          <div className={`absolute top-4 right-4 z-20`}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              className="h-9 w-9 p-0 hover:bg-muted/60"
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            </Button>
+          </div>
+        )}
+
         {/* Top Controls - Show when chat started */}
         {groupedMessages.length > 0 && (
           <div className={`sticky top-0 z-10 flex items-center justify-between ${isEmbedded ? 'p-2' : 'p-4'} bg-background/70 backdrop-blur-md border-b border-border/30 shadow-sm`}>
@@ -822,6 +832,19 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
 
               {/* Browser Live View Button */}
               <BrowserLiveViewButton sessionId={sessionId} browserSession={browserSession} />
+
+              {/* Theme Toggle */}
+              {mounted && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                  className="h-8 w-8 p-0 hover:bg-muted/60"
+                  title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+                >
+                  {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                </Button>
+              )}
             </div>
           </div>
         )}
@@ -849,7 +872,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
 
             return (
               <React.Fragment key={group.id}>
-                <div className={`mx-auto w-full ${isWideMode ? 'max-w-6xl' : 'max-w-3xl'} px-4 min-w-0`}>
+                <div className={`mx-auto w-full max-w-4xl px-4 min-w-0`}>
                   {group.type === "user" ? (
                     group.messages.map((message) => (
                       <ChatMessage key={message.id} message={message} sessionId={stableSessionId} />
@@ -860,11 +883,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                       {hasHistorySwarm && (
                         <div className="flex justify-start mb-4">
                           <div className="flex items-start space-x-4 max-w-4xl w-full min-w-0">
-                            <Avatar className="h-9 w-9 flex-shrink-0 mt-1">
-                              <AvatarFallback className="text-white bg-gradient-to-br from-purple-500 to-indigo-600">
-                                <Bot className="h-4 w-4" />
-                              </AvatarFallback>
-                            </Avatar>
+                            <AIIcon size={36} isAnimating={false} className="mt-1" />
                             <div className="flex-1 pt-0.5 min-w-0">
                               <SwarmProgress
                                 historyMode={true}
@@ -900,26 +919,15 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
           {/* SwarmProgress - shown here when active but NOT yet rendered in the loop (before AssistantTurn) */}
           {/* This covers: coordinator/specialist working, OR responder started but no messages yet */}
           {swarmProgress && swarmProgress.isActive && !hasSwarmFinalResponseGroup && (
-            <div className={`mx-auto w-full ${isWideMode ? 'max-w-6xl' : 'max-w-3xl'} px-4 min-w-0`}>
+            <div className={`mx-auto w-full max-w-4xl px-4 min-w-0`}>
               <SwarmProgress progress={swarmProgress} sessionId={stableSessionId} />
             </div>
           )}
 
           {/* Thinking Animation - Show only when agent is thinking (not in swarm mode) */}
           {agentStatus === 'thinking' && !swarmProgress?.isActive && (
-            <div className={`mx-auto w-full ${isWideMode ? 'max-w-6xl' : 'max-w-3xl'} px-4 min-w-0 animate-fade-in`}>
-              <div className="flex gap-4 items-start">
-                <div className="flex items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 h-10 w-10 flex-shrink-0 shadow-md">
-                  <Bot className="h-5 w-5 text-white" />
-                </div>
-                <div className="flex-1 pt-2">
-                  <div className="flex gap-1.5">
-                    <span className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '0ms', animationDuration: '1s' }}></span>
-                    <span className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '200ms', animationDuration: '1s' }}></span>
-                    <span className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '400ms', animationDuration: '1s' }}></span>
-                  </div>
-                </div>
-              </div>
+            <div className={`mx-auto w-full max-w-4xl px-4 min-w-0 animate-fade-in`}>
+              <AIIcon size={40} isAnimating={true} />
             </div>
           )}
 
@@ -943,7 +951,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
 
         {/* Suggested Questions - Show only for embedded mode or when explicitly enabled */}
         {isEmbedded && groupedMessages.length === 0 && availableTools.length > 0 && (
-          <div className={`mx-auto w-full ${isWideMode ? 'max-w-6xl' : 'max-w-3xl'} px-4 pb-2`}>
+          <div className={`mx-auto w-full max-w-4xl px-4 pb-2`}>
             <SuggestedQuestions
               key={suggestionKey}
               onQuestionSelect={(question) => setInputMessage(question)}
@@ -955,7 +963,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
 
         {/* File Upload Area - Above Input */}
         {selectedFiles.length > 0 && (
-          <div className={`mx-auto px-4 w-full ${isWideMode ? 'md:max-w-6xl' : 'md:max-w-3xl'} mb-2`}>
+          <div className={`mx-auto px-4 w-full md:max-w-4xl mb-2`}>
             <div className="flex flex-wrap gap-2">
               {selectedFiles.map((file, index) => (
                 <Badge key={index} variant="secondary" className="flex items-center gap-1 max-w-[200px]">
@@ -977,7 +985,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
         )}
 
         {/* Input Area */}
-        <div className={`mx-auto px-4 pb-4 md:pb-6 w-full ${isWideMode ? 'md:max-w-6xl' : 'md:max-w-3xl'} ${isEmbedded ? 'flex-shrink-0' : ''}`}>
+        <div className={`mx-auto px-4 pb-4 md:pb-6 w-full md:max-w-4xl ${isEmbedded ? 'flex-shrink-0' : ''}`}>
           {/* Show title when chat not started */}
           {groupedMessages.length === 0 && (
             <div className="flex flex-col items-center justify-center mb-16 animate-fade-in">
@@ -985,16 +993,16 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
             </div>
           )}
 
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault()
-              // Don't submit if voice mode is active (uses unified agentStatus)
-              if (isVoiceActive) return
-              await handleSendMessage(e, selectedFiles)
-              setSelectedFiles([])
-            }}
-          >
-            <div className="flex items-center gap-3 bg-muted/30 rounded-2xl p-2 shadow-sm">
+          {/* Gemini-style Chat Panel */}
+          <div className="bg-muted/40 dark:bg-zinc-900 rounded-2xl p-3 shadow-sm border border-border/50">
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault()
+                if (isVoiceActive) return
+                await handleSendMessage(e, selectedFiles)
+                setSelectedFiles([])
+              }}
+            >
               <Input
                 type="file"
                 accept="image/*,application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx"
@@ -1003,242 +1011,178 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                 className="hidden"
                 id="file-upload"
               />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => document.getElementById("file-upload")?.click()}
-                disabled={isVoiceActive}
-                className="flex items-center justify-center h-10 w-10 hover:bg-muted-foreground/10 transition-all duration-200 disabled:opacity-50"
-              >
-                <Upload className="w-5 h-5" />
-              </Button>
-              <Textarea
-                ref={textareaRef}
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-                onCompositionStart={() => {
-                  isComposingRef.current = true
-                }}
-                onCompositionEnd={() => {
-                  isComposingRef.current = false
-                }}
-                placeholder={
-                  isVoiceActive
-                    ? "Voice mode active - click mic to stop"
-                    : isResearchEnabled
-                    ? "Ask me anything... (Research Agent active)"
-                    : swarmEnabled
-                    ? "Ask me anything... (Auto mode)"
-                    : "Ask me anything..."
-                }
-                className="flex-1 min-h-[48px] max-h-32 rounded-lg border-0 focus:ring-0 resize-none py-3 px-4 text-base leading-6 overflow-y-auto bg-transparent transition-all duration-200"
-                disabled={agentStatus !== 'idle'}
-                rows={1}
-                style={{ minHeight: "48px" }}
-              />
-              {/* Voice Mode Button - Show mic button next to send (hidden in Swarm mode) */}
-              {isVoiceSupported && !swarmEnabled && (agentStatus === 'idle' || isVoiceActive) && (
-                <TooltipProvider delayDuration={300}>
+              {/* Input row with Voice/Send buttons */}
+              <div className="flex items-end gap-2">
+                <Textarea
+                  ref={textareaRef}
+                  value={inputMessage}
+                  onChange={(e) => setInputMessage(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
+                  onCompositionStart={() => {
+                    isComposingRef.current = true
+                  }}
+                  onCompositionEnd={() => {
+                    isComposingRef.current = false
+                  }}
+                  placeholder={
+                    isVoiceActive
+                      ? "Voice mode active - click mic to stop"
+                      : "Ask me anything..."
+                  }
+                  className="flex-1 min-h-[52px] max-h-36 border-0 focus:ring-0 resize-none py-2 px-1 text-base leading-relaxed overflow-y-auto bg-transparent transition-all duration-200 placeholder:text-muted-foreground/60"
+                  disabled={agentStatus !== 'idle'}
+                  rows={1}
+                />
+                {/* Voice & Send buttons */}
+                <div className="flex items-center gap-1.5 pb-1.5">
+                  {/* Voice Mode Button */}
+                  {isVoiceSupported && !swarmEnabled && (agentStatus === 'idle' || isVoiceActive) && (
+                    <TooltipProvider delayDuration={300}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={async () => {
+                              if (!isVoiceActive) {
+                                await connectVoice()
+                              } else {
+                                disconnectVoice()
+                              }
+                            }}
+                            className={`h-9 w-9 p-0 rounded-xl transition-all duration-200 ${
+                              agentStatus === 'voice_listening'
+                                ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
+                                : agentStatus === 'voice_speaking'
+                                ? 'bg-green-500 hover:bg-green-600 text-white'
+                                : agentStatus === 'voice_connecting' || agentStatus === 'voice_processing'
+                                ? 'bg-yellow-500 hover:bg-yellow-600 text-white'
+                                : 'hover:bg-muted-foreground/10 text-muted-foreground'
+                            }`}
+                          >
+                            {agentStatus === 'voice_connecting' ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Mic className="w-4 h-4" />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {!isVoiceActive
+                            ? 'Start voice chat'
+                            : agentStatus === 'voice_connecting'
+                            ? 'Connecting...'
+                            : agentStatus === 'voice_listening'
+                            ? 'Listening... (click to stop)'
+                            : agentStatus === 'voice_speaking'
+                            ? 'Speaking... (click to stop)'
+                            : 'Voice active (click to stop)'}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
+
+                  {/* Send/Stop Button */}
+                  {agentStatus !== 'idle' && !isVoiceActive ? (
+                    <Button
+                      type="button"
+                      onClick={stopGeneration}
+                      variant="ghost"
+                      size="sm"
+                      className="h-9 w-9 p-0 rounded-xl hover:bg-muted-foreground/10 transition-all duration-200"
+                      title={agentStatus === 'stopping' ? "Stopping..." : "Stop generation"}
+                      disabled={agentStatus === 'researching' || agentStatus === 'browser_automation' || agentStatus === 'stopping'}
+                    >
+                      {agentStatus === 'stopping' ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Square className="w-4 h-4" />
+                      )}
+                    </Button>
+                  ) : !isVoiceActive ? (
+                    <Button
+                      type="button"
+                      onClick={async (e) => {
+                        e.preventDefault()
+                        if (agentStatus !== 'idle' || (!inputMessage.trim() && selectedFiles.length === 0)) return
+                        await handleSendMessage(e as any, selectedFiles)
+                        setSelectedFiles([])
+                      }}
+                      disabled={agentStatus !== 'idle' || (!inputMessage.trim() && selectedFiles.length === 0)}
+                      size="sm"
+                      className="h-9 w-9 p-0 gradient-primary hover:opacity-90 text-primary-foreground rounded-xl transition-all duration-200 disabled:opacity-40"
+                    >
+                      <Send className="w-4 h-4" />
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            </form>
+
+            {/* Bottom Options Bar - Icon only */}
+            <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/30">
+              {/* Left: Upload, Tools (with Auto), Research */}
+              <TooltipProvider delayDuration={300}>
+                <div className="flex items-center gap-1">
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
                         type="button"
                         variant="ghost"
-                        onClick={async () => {
-                          if (!isVoiceActive) {
-                            await connectVoice()
-                          } else {
-                            disconnectVoice()
-                          }
-                        }}
-                        className={`h-10 w-10 transition-all duration-200 ${
-                          agentStatus === 'voice_listening'
-                            ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
-                            : agentStatus === 'voice_speaking'
-                            ? 'bg-green-500 hover:bg-green-600 text-white'
-                            : agentStatus === 'voice_connecting' || agentStatus === 'voice_processing'
-                            ? 'bg-yellow-500 hover:bg-yellow-600 text-white'
-                            : 'hover:bg-muted-foreground/10'
-                        }`}
+                        size="sm"
+                        onClick={() => document.getElementById("file-upload")?.click()}
+                        disabled={isVoiceActive}
+                        className="h-9 w-9 p-0 hover:bg-muted-foreground/10 transition-all duration-200 disabled:opacity-40 text-muted-foreground"
                       >
-                        {agentStatus === 'voice_connecting' ? (
-                          <Loader2 className="w-5 h-5 animate-spin" />
-                        ) : (
-                          <Mic className="w-5 h-5" />
-                        )}
+                        <Upload className="w-4 h-4" />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>
-                      {!isVoiceActive
-                        ? 'Start voice chat'
-                        : agentStatus === 'voice_connecting'
-                        ? 'Connecting...'
-                        : agentStatus === 'voice_listening'
-                        ? 'Listening... (click to stop)'
-                        : agentStatus === 'voice_speaking'
-                        ? 'Assistant speaking... (click to stop)'
-                        : 'Voice active (click to stop)'}
+                      <p>Upload files</p>
                     </TooltipContent>
                   </Tooltip>
-                </TooltipProvider>
-              )}
 
-              {agentStatus !== 'idle' && !isVoiceActive ? (
-                <Button
-                  type="button"
-                  onClick={stopGeneration}
-                  variant="ghost"
-                  className="h-10 w-10 hover:bg-muted-foreground/10 transition-all duration-200"
-                  title={agentStatus === 'stopping' ? "Stopping..." : "Stop generation"}
-                  disabled={agentStatus === 'researching' || agentStatus === 'browser_automation' || agentStatus === 'stopping'}
-                >
-                  {agentStatus === 'stopping' ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : (
-                    <Square className="w-5 h-5" />
-                  )}
-                </Button>
-              ) : !isVoiceActive ? (
-                <Button
-                  type="submit"
-                  disabled={agentStatus !== 'idle' || (!inputMessage.trim() && selectedFiles.length === 0)}
-                  className="h-10 w-10 gradient-primary hover:opacity-90 text-primary-foreground rounded-lg transition-all duration-200 disabled:opacity-50"
-                >
-                  <Send className="w-5 h-5" />
-                </Button>
-              ) : null}
-            </div>
-          </form>
+                  <ToolsDropdown
+                    availableTools={availableTools}
+                    onToggleTool={toggleTool}
+                    disabled={isResearchEnabled || isVoiceActive}
+                    autoEnabled={swarmEnabled}
+                    onToggleAuto={toggleSwarm}
+                  />
 
-          {/* Model selector, keyboard shortcut hint and wide mode toggle */}
-          <div className="mt-2 flex items-center justify-between text-sm text-muted-foreground/70">
-            {/* Left: Model Selector, Tools, and Research Agent */}
-            <TooltipProvider delayDuration={300}>
-              <div className="flex items-center gap-0.5">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={toggleResearchAgent}
+                        disabled={isVoiceActive}
+                        className={`h-9 w-9 p-0 transition-all duration-200 ${
+                          isResearchEnabled
+                            ? 'bg-blue-500/15 hover:bg-blue-500/25 text-blue-500'
+                            : isVoiceActive
+                            ? 'opacity-40 cursor-not-allowed'
+                            : 'hover:bg-muted-foreground/10 text-muted-foreground'
+                        }`}
+                      >
+                        <FlaskConical className="w-4 h-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{isResearchEnabled ? 'Research mode (click to disable)' : 'Enable Research mode'}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              </TooltipProvider>
+
+              {/* Right: Model */}
+              <div className="flex items-center">
                 <ModelConfigDialog sessionId={sessionId} agentStatus={agentStatus} />
-                <ToolsDropdown
-                  availableTools={availableTools}
-                  onToggleTool={toggleTool}
-                  disabled={isResearchEnabled || swarmEnabled || isVoiceActive}
-                />
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={toggleSwarm}
-                      disabled={isResearchEnabled || isVoiceActive}
-                      className={`h-7 px-2 transition-all duration-200 text-xs font-medium flex items-center gap-1 ${
-                        swarmEnabled
-                          ? 'bg-purple-500/20 text-purple-500 hover:bg-purple-500/30'
-                          : isResearchEnabled || isVoiceActive
-                          ? 'opacity-40 cursor-not-allowed'
-                          : 'hover:bg-muted-foreground/10'
-                      }`}
-                    >
-                      <Bot className="w-3.5 h-3.5" />
-                      Auto
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>{swarmEnabled ? 'Auto mode active' : 'AI agents collaborate automatically'}</p>
-                  </TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={toggleResearchAgent}
-                      disabled={isVoiceActive}
-                      className={`h-7 px-2 transition-all duration-200 text-xs font-medium flex items-center gap-1 ${
-                        isResearchEnabled
-                          ? 'bg-blue-500/20 text-blue-500 hover:bg-blue-500/30'
-                          : isVoiceActive
-                          ? 'opacity-40 cursor-not-allowed'
-                          : 'hover:bg-muted-foreground/10'
-                      }`}
-                    >
-                      <FlaskConical className="w-3.5 h-3.5" />
-                      Research
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>{isResearchEnabled ? 'Research mode active' : 'Conducts web research, cites sources, generates visualizations'}</p>
-                  </TooltipContent>
-                </Tooltip>
               </div>
-            </TooltipProvider>
-
-            {/* Spacer */}
-            <div className="flex-1"></div>
-
-            {/* Right: Export, Theme toggle and Wide mode toggle */}
-            <TooltipProvider delayDuration={300}>
-              <div className="flex items-center gap-1">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={exportConversation}
-                      disabled={groupedMessages.length === 0}
-                      className="h-7 px-2 hover:bg-muted-foreground/10 transition-all duration-200 disabled:opacity-40"
-                    >
-                      <Download className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Export conversation</p>
-                  </TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                      className="h-7 px-2 hover:bg-muted-foreground/10 transition-all duration-200 relative"
-                    >
-                      <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-                      <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</p>
-                  </TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setIsWideMode(!isWideMode)}
-                      className="h-7 px-2 hover:bg-muted-foreground/10 transition-all duration-200"
-                    >
-                      {isWideMode ? (
-                        <Minimize2 className="w-4 h-4" />
-                      ) : (
-                        <Maximize2 className="w-4 h-4" />
-                      )}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>{isWideMode ? 'Normal width' : 'Wide mode'}</p>
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-            </TooltipProvider>
+            </div>
           </div>
         </div>
       </SidebarInset>

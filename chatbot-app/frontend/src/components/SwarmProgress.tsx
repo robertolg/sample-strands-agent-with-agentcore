@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, Bot, Wrench, Sparkles, ArrowRight, FileText, FileSpreadsheet, Presentation, Download, BarChart2, Image } from 'lucide-react';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { ChevronDown, Wrench, Sparkles, ArrowRight, FileText, FileSpreadsheet, Presentation, Download, BarChart2, Image } from 'lucide-react';
+import { AIIcon } from '@/components/ui/AIIcon';
 import { SwarmProgress as SwarmProgressType, SWARM_AGENT_DISPLAY_NAMES, SwarmAgentStep } from '@/types/events';
 import { Markdown } from '@/components/ui/Markdown';
 import { cn } from '@/lib/utils';
@@ -312,12 +312,8 @@ export function SwarmProgress({ progress, className, historyMode, historyAgents,
   return (
     <div className={cn("flex justify-start mb-4 group", className)}>
       <div className="flex items-start space-x-4 max-w-4xl w-full min-w-0">
-        {/* Bot Avatar */}
-        <Avatar className="h-9 w-9 flex-shrink-0 mt-1">
-          <AvatarFallback className="text-white bg-gradient-to-br from-purple-500 to-indigo-600">
-            <Bot className="h-4 w-4" />
-          </AvatarFallback>
-        </Avatar>
+        {/* AI Avatar */}
+        <AIIcon size={36} isAnimating={!isComplete} className="mt-1" />
 
         {/* Content */}
         <div className="flex-1 pt-0.5 min-w-0 space-y-3">

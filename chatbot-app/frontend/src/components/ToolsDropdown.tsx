@@ -4,6 +4,7 @@ import React, { useState, useMemo } from 'react';
 import { Tool } from '@/types/chat';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import {
   Popover,
   PopoverContent,
@@ -15,16 +16,24 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { Wrench, Search, Check } from 'lucide-react';
+import { Sparkles, Search, Check, Zap } from 'lucide-react';
 import { getToolIcon } from '@/config/tool-icons';
 
 interface ToolsDropdownProps {
   availableTools: Tool[];
   onToggleTool: (toolId: string) => void;
   disabled?: boolean;
+  autoEnabled?: boolean;
+  onToggleAuto?: (enabled: boolean) => void;
 }
 
-export function ToolsDropdown({ availableTools, onToggleTool, disabled = false }: ToolsDropdownProps) {
+export function ToolsDropdown({
+  availableTools,
+  onToggleTool,
+  disabled = false,
+  autoEnabled = false,
+  onToggleAuto
+}: ToolsDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -157,37 +166,77 @@ export function ToolsDropdown({ availableTools, onToggleTool, disabled = false }
                 variant="ghost"
                 size="sm"
                 disabled={disabled}
-                className={`h-7 px-3 transition-all duration-200 text-xs font-medium flex items-center gap-1.5 ${
+                className={`h-9 w-9 p-0 transition-all duration-200 ${
                   disabled
                     ? 'opacity-40 cursor-not-allowed hover:bg-transparent'
-                    : 'hover:bg-muted-foreground/10'
+                    : autoEnabled
+                    ? 'bg-purple-500/15 hover:bg-purple-500/25 text-purple-500'
+                    : enabledCount > 0
+                    ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400'
+                    : 'hover:bg-muted-foreground/10 text-muted-foreground'
                 }`}
               >
-                <Wrench className="w-3.5 h-3.5" />
-                Tools ({enabledCount})
+                <Sparkles className="w-4 h-4" />
               </Button>
             </PopoverTrigger>
           </TooltipTrigger>
           <TooltipContent>
-            <p>{disabled ? 'Tool selection disabled' : 'Select specific tools to enhance AI abilities'}</p>
+            <p>{disabled ? 'Disabled in Research mode' : autoEnabled ? 'Auto mode (AI selects tools)' : `Tools (${enabledCount} enabled)`}</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
       <PopoverContent
         align="start"
         side="top"
-        className="w-[420px] max-w-[calc(100vw-2rem)] h-[500px] max-h-[70vh] p-0 shadow-lg flex flex-col"
-        sideOffset={10}
+        className="w-[380px] max-w-[calc(100vw-2rem)] h-[480px] max-h-[70vh] p-0 shadow-xl rounded-xl flex flex-col overflow-hidden"
+        sideOffset={12}
       >
+        {/* Auto Mode Toggle */}
+        {onToggleAuto && (
+          <div className="px-4 pt-4 pb-3 border-b border-border/50 shrink-0">
+            <div
+              onClick={() => onToggleAuto(!autoEnabled)}
+              className={`flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-200 ${
+                autoEnabled
+                  ? 'bg-gradient-to-r from-purple-500/15 to-violet-500/15 border border-purple-300/50 dark:border-purple-700/50'
+                  : 'bg-muted/30 hover:bg-muted/50 border border-transparent'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                  autoEnabled
+                    ? 'bg-purple-500 shadow-lg shadow-purple-500/30'
+                    : 'bg-slate-200 dark:bg-slate-700'
+                }`}>
+                  <Zap className={`w-4 h-4 ${autoEnabled ? 'text-white' : 'text-slate-500 dark:text-slate-400'}`} />
+                </div>
+                <div>
+                  <div className={`text-sm font-semibold ${autoEnabled ? 'text-purple-700 dark:text-purple-300' : 'text-foreground'}`}>
+                    Auto Mode
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    AI automatically selects tools
+                  </div>
+                </div>
+              </div>
+              <Switch
+                checked={autoEnabled}
+                onCheckedChange={onToggleAuto}
+                className="data-[state=checked]:bg-purple-500"
+              />
+            </div>
+          </div>
+        )}
+
         {/* Header */}
-        <div className="p-4 border-b shrink-0 bg-gradient-to-b from-slate-50/50 to-transparent dark:from-slate-900/50">
-          <div className="flex items-center justify-between mb-3.5">
-            <h3 className="text-base font-semibold flex items-center gap-2 text-slate-900 dark:text-slate-100">
-              <Wrench className="w-4.5 h-4.5 text-slate-700 dark:text-slate-300" />
-              Tools
+        <div className={`p-4 border-b shrink-0 ${autoEnabled ? 'opacity-50' : ''}`}>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold flex items-center gap-2 text-slate-700 dark:text-slate-300">
+              <Sparkles className="w-4 h-4" />
+              Manual Selection
             </h3>
-            <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-              {enabledCount} enabled
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">
+              {enabledCount} active
             </span>
           </div>
           {/* Search */}
@@ -198,13 +247,14 @@ export function ToolsDropdown({ availableTools, onToggleTool, disabled = false }
               placeholder="Search tools..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              disabled={autoEnabled}
               className="pl-9 h-9 text-sm bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 focus-visible:ring-2 focus-visible:ring-emerald-500/20 focus-visible:border-emerald-500"
             />
           </div>
         </div>
 
         {/* Tool List */}
-        <div className="flex-1 overflow-y-auto">
+        <div className={`flex-1 overflow-y-auto ${autoEnabled ? 'opacity-40 pointer-events-none' : ''}`}>
             <div className="p-4 space-y-3">
               {/* Active Tools Section */}
               {!searchQuery && enabledTools.length > 0 && (

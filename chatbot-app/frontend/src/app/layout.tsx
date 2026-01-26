@@ -7,12 +7,12 @@ import AuthWrapper from '@/components/AuthWrapper'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Strands Chatbot',
-  description: 'A smart AI assistant powered by Strands',
+  title: 'Your Agent Workspace',
+  description: 'AI-powered agent workspace',
   icons: {
-    icon: '/strands.svg',
-    shortcut: '/strands.svg',
-    apple: '/strands.svg',
+    icon: '/favicon.png',
+    shortcut: '/favicon.png',
+    apple: '/favicon.png',
   },
 }
 

@@ -242,7 +242,7 @@ const NonMemoizedMarkdown = ({
   toolUseId
 }: {
   children: string;
-  size?: 'sm' | 'base' | 'lg' | 'xl';
+  size?: 'sm' | 'base' | 'lg' | 'xl' | '2xl';
   preserveLineBreaks?: boolean;
   sessionId?: string;
   toolUseId?: string;
@@ -251,10 +251,20 @@ const NonMemoizedMarkdown = ({
   const parts = useMemo(() => parseContentWithCharts(children), [children]);
   const remarkPlugins = useMemo(() => getRemarkPlugins(preserveLineBreaks), [preserveLineBreaks]);
 
-  const proseClass = `prose prose-${size} max-w-none dark:prose-invert prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-1.5 prose-p:leading-relaxed prose-p:text-base prose-li:py-0.5 prose-li:text-base prose-ul:my-2 prose-ol:my-2 prose-li:my-0 prose-ul:text-base prose-ol:text-base break-words min-w-0`;
+  // Font size mapping (in pixels)
+  const fontSizeMap: Record<string, string> = {
+    'sm': '14px',
+    'base': '15px',
+    'lg': '16px',
+    'xl': '18px',
+    '2xl': '17px'
+  };
+  const fontSize = fontSizeMap[size] || '15px';
+
+  const proseClass = `prose max-w-none dark:prose-invert prose-headings:font-semibold prose-headings:mt-5 prose-headings:mb-2 prose-p:leading-relaxed prose-p:my-3 prose-li:py-1 prose-li:leading-relaxed prose-ul:my-3 prose-ol:my-3 prose-li:my-0 break-words min-w-0 ai-message-text`;
 
   return (
-    <div className={proseClass} style={{ width: '100%', maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+    <div className={proseClass} style={{ width: '100%', maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'anywhere', '--ai-font-size': fontSize } as React.CSSProperties}>
       {parts.map((part, index) => {
         if (part.type === 'chart' && part.chartData) {
           return (

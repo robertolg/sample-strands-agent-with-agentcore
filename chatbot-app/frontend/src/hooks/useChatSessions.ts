@@ -69,6 +69,49 @@ export function useChatSessions({ sessionId, onNewChat }: UseChatSessionsProps) 
     }
   }, [sessionId, loadSessions, onNewChat]);
 
+  // Delete all sessions
+  const deleteAllSessions = useCallback(async () => {
+    try {
+      // Get fresh list of sessions first
+      const freshData = await apiGet<{ success: boolean; sessions: ChatSession[] }>(
+        'session/list?limit=100&status=active',
+        {
+          headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+        }
+      );
+
+      if (!freshData.success || !freshData.sessions || freshData.sessions.length === 0) {
+        setChatSessions([]);
+        onNewChat();
+        return;
+      }
+
+      // Delete each session sequentially
+      for (const session of freshData.sessions) {
+        try {
+          await apiDelete<{ success: boolean; error?: string }>(
+            `session/delete?session_id=${session.sessionId}`,
+            {
+              headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+            }
+          );
+        } catch (e) {
+          console.error(`Failed to delete session ${session.sessionId}:`, e);
+          // Continue deleting other sessions even if one fails
+        }
+      }
+
+      // Clear local state immediately
+      setChatSessions([]);
+
+      // Start new chat
+      onNewChat();
+    } catch (error) {
+      console.error('Failed to delete all sessions:', error);
+      throw error;
+    }
+  }, [sessionId, onNewChat]);
+
   // Load sessions on mount and when sessionId changes
   useEffect(() => {
     loadSessions();
@@ -87,5 +130,6 @@ export function useChatSessions({ sessionId, onNewChat }: UseChatSessionsProps) 
     isLoadingSessions,
     loadSessions,
     deleteSession,
+    deleteAllSessions,
   };
 }

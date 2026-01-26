@@ -61,8 +61,8 @@ function processSwarmMessageContent(
           if (agentsMatch) {
             agentsUsed = agentsMatch[1]
               .split(',')
-              .map(s => s.trim().replace(/['"]/g, ''))
-              .filter(s => s.length > 0)
+              .map((s: string) => s.trim().replace(/['"]/g, ''))
+              .filter((s: string) => s.length > 0)
           }
 
           // Extract shared_context for each agent

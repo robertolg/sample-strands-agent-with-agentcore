@@ -2,7 +2,8 @@ import React, { useState, useMemo } from 'react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Bot, Clock, Zap, Coins, Copy, ThumbsUp, ThumbsDown, Check, FileText, Download, FileSpreadsheet, Presentation, AudioWaveform, Sparkles } from 'lucide-react'
+import { Clock, Zap, Coins, Copy, ThumbsUp, ThumbsDown, Check, FileText, Download, FileSpreadsheet, Presentation, AudioWaveform } from 'lucide-react'
+import { AIIcon } from '@/components/ui/AIIcon'
 import { Message } from '@/types/chat'
 import { ReasoningState } from '@/types/events'
 import { Markdown } from '@/components/ui/Markdown'
@@ -305,19 +306,13 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
       <div className={`flex items-start max-w-4xl w-full min-w-0 ${hideAvatar ? '' : 'space-x-4'}`}>
         {/* Single Avatar for the entire turn - hidden when part of Swarm response */}
         {!hideAvatar && (
-          <Avatar className="h-9 w-9 flex-shrink-0 mt-2">
-            <AvatarFallback className={`text-white ${
-              messages.some(m => m.isVoiceMessage)
-                ? 'bg-gradient-to-br from-fuchsia-500 to-purple-600'
-                : 'bg-gradient-to-br from-blue-600 to-purple-600'
-            }`}>
-              {messages.some(m => m.isVoiceMessage) ? (
-                <AudioWaveform className="h-4 w-4" />
-              ) : (
-                <Bot className="h-4 w-4" />
-              )}
-            </AvatarFallback>
-          </Avatar>
+          messages.some(m => m.isVoiceMessage) ? (
+            <div className="h-9 w-9 flex-shrink-0 mt-2 flex items-center justify-center rounded-full text-white bg-gradient-to-br from-fuchsia-500 to-purple-600">
+              <AudioWaveform className="h-4 w-4" />
+            </div>
+          ) : (
+            <AIIcon size={36} isAnimating={messages.some(m => m.isStreaming)} className="mt-2" />
+          )
         )}
 
         {/* Turn Content - add left margin when avatar is hidden to align with SwarmProgress content */}
