@@ -15,7 +15,7 @@ Usage:
         compaction_enabled=True,
     )
 
-    # For VoiceChatbotAgent
+    # For VoiceAgent
     session_manager = create_session_manager(
         session_id=session_id,
         user_id=user_id,
@@ -267,7 +267,7 @@ def create_session_manager(
             compaction_enabled=True,
         )
 
-        # For VoiceChatbotAgent
+        # For VoiceAgent
         manager = create_session_manager(
             session_id="sess-123",
             user_id="user-456",
@@ -405,8 +405,9 @@ def _create_local_session_manager(
         )
 
     elif mode == "swarm":
-        # Swarm mode: Plain FileSessionManager
-        return FileSessionManager(
+        # Swarm mode: UnifiedFileSessionManager (for metadata support)
+        from agent.session.unified_file_session_manager import UnifiedFileSessionManager
+        return UnifiedFileSessionManager(
             session_id=session_id,
             storage_dir=str(sessions_dir),
         )

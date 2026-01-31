@@ -112,21 +112,23 @@ class StreamEventFormatter:
             if len(tool_result["content"]) > 0:
                 first_item = tool_result["content"][0]
                 if isinstance(first_item, dict) and "text" in first_item:
-                    try:
-                        text_content = first_item["text"]
-                        logger.info(f"[Lambda Unwrap] Checking text content (first 200 chars): {text_content[:200]}")
-                        parsed = json.loads(text_content)
-                        if isinstance(parsed, dict) and "statusCode" in parsed and "body" in parsed:
-                            logger.info(f"[Lambda Unwrap] Detected Lambda response, unwrapping...")
-                            body = json.loads(parsed["body"]) if isinstance(parsed["body"], str) else parsed["body"]
-                            logger.info(f"[Lambda Unwrap] Body keys: {body.keys() if isinstance(body, dict) else 'not a dict'}")
-                            if "content" in body:
-                                # Replace with unwrapped content
-                                tool_result["content"] = body["content"]
-                                logger.info(f"[Lambda Unwrap] Successfully unwrapped Lambda response")
-                    except (json.JSONDecodeError, KeyError) as e:
-                        logger.warning(f"[Lambda Unwrap] Failed to unwrap: {e}")
-                        pass
+                    text_content = first_item["text"]
+                    # Skip empty or whitespace-only text
+                    if text_content and text_content.strip():
+                        try:
+                            logger.info(f"[Lambda Unwrap] Checking text content (first 200 chars): {text_content[:200]}")
+                            parsed = json.loads(text_content)
+                            if isinstance(parsed, dict) and "statusCode" in parsed and "body" in parsed:
+                                logger.info(f"[Lambda Unwrap] Detected Lambda response, unwrapping...")
+                                body = json.loads(parsed["body"]) if isinstance(parsed["body"], str) else parsed["body"]
+                                logger.info(f"[Lambda Unwrap] Body keys: {body.keys() if isinstance(body, dict) else 'not a dict'}")
+                                if "content" in body:
+                                    # Replace with unwrapped content
+                                    tool_result["content"] = body["content"]
+                                    logger.info(f"[Lambda Unwrap] Successfully unwrapped Lambda response")
+                        except (json.JSONDecodeError, KeyError) as e:
+                            logger.debug(f"[Lambda Unwrap] Not a Lambda response, skipping: {e}")
+                            pass
 
         # 1. Extract all content (text and images) and process Base64
         result_text, result_images = StreamEventFormatter._extract_all_content(tool_result)

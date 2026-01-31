@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Menu, Plus, Trash2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Menu, Plus, Trash2, Moon, Sun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -24,16 +24,26 @@ interface ChatSidebarProps {
   sessionId: string | null;
   onNewChat: () => void;
   loadSession?: (sessionId: string) => Promise<void>;
+  theme?: string;
+  setTheme?: (theme: string) => void;
 }
 
 export function ChatSidebar({
   sessionId,
   onNewChat,
   loadSession,
+  theme,
+  setTheme,
 }: ChatSidebarProps) {
   const { toggleSidebar } = useSidebar();
   const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+
+  // Prevent hydration mismatch by only rendering theme-dependent UI after mount
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Use custom hooks
   const { chatSessions, isLoadingSessions, deleteSession, deleteAllSessions } = useChatSessions({
@@ -58,10 +68,10 @@ export function ChatSidebar({
       side="left"
       className="group-data-[side=left]:border-r-0 bg-sidebar-background border-sidebar-border text-sidebar-foreground flex flex-col h-full"
     >
-      {/* Header - Hamburger menu */}
+      {/* Header - Hamburger menu & Theme toggle */}
       <SidebarHeader className="flex-shrink-0 px-3 py-3 border-b-0">
         <SidebarMenu>
-          <div className="flex flex-row items-center gap-2">
+          <div className="flex flex-row items-center justify-between">
             <Button
               variant="ghost"
               size="sm"
@@ -71,6 +81,17 @@ export function ChatSidebar({
             >
               <Menu className="h-5 w-5" />
             </Button>
+            {isMounted && theme && setTheme && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                className="h-9 w-9 p-0 hover:bg-sidebar-accent"
+                title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              >
+                {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+              </Button>
+            )}
           </div>
         </SidebarMenu>
       </SidebarHeader>

@@ -4,6 +4,8 @@ import React from "react"
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { useChat } from "@/hooks/useChat"
 import { useIframeAuth, postAuthStatusToParent } from "@/hooks/useIframeAuth"
+import { useArtifacts } from "@/hooks/useArtifacts"
+import { ArtifactType } from "@/types/artifact"
 import { ChatMessage } from "@/components/chat/ChatMessage"
 import { AssistantTurn } from "@/components/chat/AssistantTurn"
 import { Greeting } from "@/components/Greeting"
@@ -15,6 +17,10 @@ import { ResearchModal } from "@/components/ResearchModal"
 import { BrowserResultModal } from "@/components/BrowserResultModal"
 import { InterruptApprovalModal } from "@/components/InterruptApprovalModal"
 import { SwarmProgress } from "@/components/SwarmProgress"
+import { Canvas } from "@/components/Canvas"
+import { VoiceAnimation } from "@/components/VoiceAnimation"
+import { ComposeWizard, ComposeConfig } from "@/components/ComposeWizard"
+import { useComposer } from "@/hooks/useComposer"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -22,12 +28,12 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { SidebarTrigger, SidebarInset, useSidebar } from "@/components/ui/sidebar"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Upload, Send, FileText, ImageIcon, Square, Moon, Sun, Loader2, ArrowDown, Mic, FlaskConical } from "lucide-react"
+import { Upload, Send, FileText, ImageIcon, Square, Loader2, ArrowDown, Mic, FlaskConical, Sparkles } from "lucide-react"
 import { AIIcon } from "@/components/ui/AIIcon"
 import { ModelConfigDialog } from "@/components/ModelConfigDialog"
 import { apiGet } from "@/lib/api-client"
 import { useTheme } from "next-themes"
-import { useVoiceChat } from "@/hooks/useVoiceChat"
+import { useVoiceIntegration } from "@/hooks/useVoiceIntegration"
 
 interface ChatInterfaceProps {
   mode: 'standalone' | 'embedded'
@@ -83,16 +89,32 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
   const { setOpen, setOpenMobile, open } = sidebarContext
   const { theme, setTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
+  const [isMobileView, setIsMobileView] = useState(false)
 
   // Prevent hydration mismatch by only rendering theme-dependent UI after mount
   useEffect(() => {
     setMounted(true)
   }, [])
 
+  // Detect mobile viewport
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobileView(window.innerWidth < 768) // Tailwind md breakpoint
+    }
+
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+
+    return () => window.removeEventListener('resize', checkMobile)
+  }, [])
+
   // Scroll control state
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false)
   const isAutoScrollingRef = useRef(false)
+
+  // Ref for artifact refresh callback (to avoid circular dependency)
+  const refreshArtifactsRef = useRef<(() => void) | null>(null)
 
   const {
     groupedMessages,
@@ -123,7 +145,15 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     updateVoiceMessage,
     setVoiceStatus,
     finalizeVoiceMessage,
-  } = useChat()
+    addArtifactMessage,
+  } = useChat({
+    onArtifactUpdated: () => {
+      // Call the ref function (set after useArtifacts initializes)
+      if (refreshArtifactsRef.current) {
+        refreshArtifactsRef.current()
+      }
+    }
+  })
 
   // Calculate tool counts considering nested tools in dynamic groups (excluding Research Agent)
   const { enabledCount, totalCount } = useMemo(() => {
@@ -188,6 +218,185 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isComposingRef = useRef(false)
 
+  // Compose wizard state
+  const [isComposeWizardOpen, setIsComposeWizardOpen] = useState(false)
+  const [inputRect, setInputRect] = useState<DOMRect | null>(null)
+
+  // Artifact management
+  const {
+    artifacts,
+    selectedArtifactId,
+    isCanvasOpen,
+    toggleCanvas: toggleCanvasBase,
+    openArtifact: openArtifactBase,
+    closeCanvas: closeCanvasBase,
+    setSelectedArtifactId,
+    addArtifact,
+    removeArtifact,
+    refreshArtifacts,
+    justUpdated: artifactJustUpdated,
+  } = useArtifacts(groupedMessages, sessionId)
+
+  // Update ref after useArtifacts initializes (to avoid circular dependency with useChat)
+  useEffect(() => {
+    refreshArtifactsRef.current = refreshArtifacts
+  }, [refreshArtifacts])
+
+  // Composer artifact ID tracking
+  const [composeArtifactId, setComposeArtifactId] = useState<string | null>(null)
+
+  // Artifact editing state
+  const [editingArtifact, setEditingArtifact] = useState<{
+    id: string
+    title: string
+    content: string
+  } | null>(null)
+
+  // Composer management
+  const composer = useComposer({
+    sessionId,
+    onDocumentComplete: async (doc) => {
+      // Remove temporary compose artifact from UI
+      if (composeArtifactId) {
+        removeArtifact(composeArtifactId)
+      }
+      setComposeArtifactId(null)
+      // Artifact is added via onArtifactCreated callback (real-time from backend)
+    },
+    onArtifactCreated: (artifact) => {
+      // Artifact saved to backend - add to local state immediately
+      console.log('[ChatInterface] Artifact created from backend:', artifact.id)
+      addArtifact({
+        id: artifact.id,
+        type: artifact.type as ArtifactType,
+        title: artifact.title,
+        content: artifact.content,
+        description: artifact.metadata?.description || `${artifact.metadata?.word_count || 0} words`,
+        timestamp: artifact.created_at || new Date().toISOString(),
+        sessionId: sessionId || '',
+      })
+
+      // Add artifact message to chat (real-time update)
+      addArtifactMessage({
+        id: artifact.id,
+        type: artifact.type,
+        title: artifact.title,
+        wordCount: artifact.metadata?.word_count
+      })
+
+      // Also save to sessionStorage for persistence across reloads
+      if (sessionId) {
+        const artifactsKey = `artifacts-${sessionId}`
+        const stored = sessionStorage.getItem(artifactsKey)
+        const artifacts = stored ? JSON.parse(stored) : []
+        artifacts.push(artifact)
+        sessionStorage.setItem(artifactsKey, JSON.stringify(artifacts))
+      }
+
+      // Auto-open the new artifact
+      openArtifactBase(artifact.id)
+    },
+  })
+
+  // Wrapped startCompose to create artifact immediately
+  const startCompose = useCallback(async (message: string) => {
+    // Create compose artifact
+    const artifactId = `compose-${Date.now()}`
+    setComposeArtifactId(artifactId)
+
+    addArtifact({
+      id: artifactId,
+      type: 'compose',
+      title: 'Composing Document...',
+      content: {}, // Content is provided via composeState prop in Canvas
+      description: 'Document composition in progress',
+      toolName: 'composer',
+      timestamp: new Date().toISOString(),
+      sessionId: sessionId || '',
+    })
+
+    // Open canvas
+    openArtifactBase(artifactId)
+
+    // Start composition - backend will load conversation history and model config automatically
+    await composer.startCompose(message)
+  }, [sessionId, composer, addArtifact, openArtifactBase])
+
+  // Handle edit in chat - explicit mode via button
+
+  // Auto-enable editing mode when canvas is open with a document
+  useEffect(() => {
+    if (isCanvasOpen && selectedArtifactId) {
+      const artifact = artifacts.find(a => a.id === selectedArtifactId)
+      if (artifact && artifact.type === 'document' && typeof artifact.content === 'string') {
+        setEditingArtifact({
+          id: artifact.id,
+          title: artifact.title,
+          content: artifact.content
+        })
+      }
+    } else {
+      setEditingArtifact(null)
+    }
+  }, [isCanvasOpen, selectedArtifactId, artifacts])
+
+  // Wrapper functions to ensure mutual exclusivity between left sidebar and canvas
+  const toggleCanvas = useCallback(() => {
+    if (!isCanvasOpen) {
+      // Opening canvas - close left sidebar
+      setOpen(false)
+      setOpenMobile(false)
+    }
+    toggleCanvasBase()
+  }, [isCanvasOpen, toggleCanvasBase, setOpen, setOpenMobile])
+
+  const openArtifact = useCallback((id: string) => {
+    // Opening canvas - close left sidebar
+    setOpen(false)
+    setOpenMobile(false)
+    openArtifactBase(id)
+  }, [openArtifactBase, setOpen, setOpenMobile])
+
+  const closeCanvas = useCallback(() => {
+    // Clear editing state when closing panel
+    setEditingArtifact(null)
+    closeCanvasBase()
+  }, [closeCanvasBase])
+
+  // Close canvas when left sidebar opens
+  useEffect(() => {
+    if (open && isCanvasOpen) {
+      closeCanvas()
+    }
+  }, [open, isCanvasOpen, closeCanvas])
+
+  // Close canvas on mobile view
+  useEffect(() => {
+    if (isMobileView && isCanvasOpen) {
+      closeCanvas()
+    }
+  }, [isMobileView, isCanvasOpen, closeCanvas])
+
+  // Listen for open-artifact events from ChatMessage artifact cards
+  useEffect(() => {
+    const handleOpenArtifact = (event: CustomEvent<{ artifactId: string }>) => {
+      openArtifact(event.detail.artifactId)
+    }
+    const handleOpenArtifactByTitle = (event: CustomEvent<{ title: string }>) => {
+      // Find artifact by title
+      const artifact = artifacts.find(a => a.title === event.detail.title)
+      if (artifact) {
+        openArtifact(artifact.id)
+      }
+    }
+    window.addEventListener('open-artifact', handleOpenArtifact as EventListener)
+    window.addEventListener('open-artifact-by-title', handleOpenArtifactByTitle as EventListener)
+    return () => {
+      window.removeEventListener('open-artifact', handleOpenArtifact as EventListener)
+      window.removeEventListener('open-artifact-by-title', handleOpenArtifactByTitle as EventListener)
+    }
+  }, [openArtifact, artifacts])
+
 
   // Get enabled tool IDs for voice chat (including nested tools from dynamic groups)
   const enabledToolIds = useMemo(() => {
@@ -217,53 +426,25 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     }
   }, [])
 
-  // Voice chat hook - delegates state management to useChat via callbacks
+  // Voice integration hook
   const {
-    isSupported: isVoiceSupported,
-    currentToolExecution: voiceToolExecution,
-    pendingTranscript,
-    error: voiceError,
-    connect: connectVoice,
-    disconnect: disconnectVoice,
-  } = useVoiceChat({
+    isVoiceSupported,
+    isVoiceActive,
+    voiceToolExecution,
+    voiceError,
+    connectVoice,
+    disconnectVoice,
+    forceDisconnectVoice,
+  } = useVoiceIntegration({
     sessionId,
-    enabledTools: enabledToolIds,
-    onStatusChange: setVoiceStatus,  // Unified state management
-    onTranscript: (entry) => {
-      // Stream all transcripts to chat (both intermediate and final)
-      if (entry.text.trim()) {
-        updateVoiceMessage(entry.role, entry.text, entry.isFinal)
-      }
-    },
-    onToolExecution: (execution) => {
-      console.log('[ChatInterface] onToolExecution called:', execution)
-      // Add tool execution as separate tool message (mirrors text mode pattern)
-      const toolExec = {
-        id: execution.toolUseId,
-        toolName: execution.toolName,
-        toolInput: execution.input,
-        toolResult: execution.result,
-        isComplete: execution.status !== 'running',
-        isCancelled: execution.status === 'error',
-        reasoning: [],  // Voice mode doesn't have reasoning
-        isExpanded: true,  // Default to expanded (like text mode)
-      }
-      console.log('[ChatInterface] Created toolExec for addVoiceToolExecution:', toolExec)
-      addVoiceToolExecution(toolExec)
-    },
-    onResponseComplete: () => {
-      // Called when assistant finishes speaking (bidi_response_complete)
-      // Finalize the current streaming assistant message
-      finalizeVoiceMessage()
-    },
-    onError: (error) => {
-      console.error('[Voice] Error:', error)
-    },
-    onSessionCreated: refreshSessionList,  // Refresh session list when voice creates new session
+    enabledToolIds,
+    agentStatus,
+    addVoiceToolExecution,
+    updateVoiceMessage,
+    setVoiceStatus,
+    finalizeVoiceMessage,
+    onSessionCreated: refreshSessionList,
   })
-
-  // Helper to check if voice mode is active (derived from unified agentStatus)
-  const isVoiceActive = agentStatus.startsWith('voice_')
 
 
   // Sync Research Agent state with availableTools
@@ -556,21 +737,17 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
 
   const handleNewChat = useCallback(async () => {
     // Force disconnect voice chat before creating new session
-    if (isVoiceActive) {
-      disconnectVoice()
-    }
+    forceDisconnectVoice()
     await newChat()
     regenerateSuggestions()
-  }, [newChat, regenerateSuggestions, isVoiceActive, disconnectVoice])
+  }, [newChat, regenerateSuggestions, forceDisconnectVoice])
 
   // Wrapper for loadSession that disconnects voice first
   const handleLoadSession = useCallback(async (newSessionId: string) => {
     // Force disconnect voice chat before switching sessions
-    if (isVoiceActive) {
-      disconnectVoice()
-    }
+    forceDisconnectVoice()
     await loadSession(newSessionId)
-  }, [loadSession, isVoiceActive, disconnectVoice])
+  }, [loadSession, forceDisconnectVoice])
 
   const handleToggleTool = useCallback(
     async (toolId: string) => {
@@ -580,12 +757,92 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
     [toggleTool, regenerateSuggestions],
   )
 
+  // Compose wizard handlers
+  const handleComposeComplete = useCallback(async (config: ComposeConfig) => {
+    setIsComposeWizardOpen(false)
+
+    // Close sidebars
+    if (open) {
+      setOpen(false)
+    }
+    setOpenMobile(false)
+
+    // Send structured data as JSON to backend (no LLM parsing needed)
+    const documentTypeMap: Record<string, string> = {
+      'blog': 'blog post',
+      'report': 'technical report',
+      'essay': 'essay',
+      'proposal': 'proposal',
+      'article': 'article',
+      'custom': 'document'
+    }
+
+    const composeRequest = {
+      document_type: documentTypeMap[config.documentType] || config.documentType,
+      topic: config.topic,
+      length_guidance: config.length,
+      extracted_points: [] // Empty for now, backend will extract from conversation
+    }
+
+    // Send as JSON string (backend will detect and parse directly)
+    const composeMessage = JSON.stringify(composeRequest)
+
+    // Clear input
+    setInputMessage('')
+
+    // Start compose workflow using hook
+    await startCompose(composeMessage)
+  }, [startCompose, open, setOpen, setOpenMobile, setInputMessage])
+
+  // Detect /compose command
+  useEffect(() => {
+    if (inputMessage.trim() === '/compose') {
+      // Get textarea rect for wizard positioning
+      if (textareaRef.current) {
+        const rect = textareaRef.current.getBoundingClientRect()
+        setInputRect(rect)
+        setIsComposeWizardOpen(true)
+      }
+    } else {
+      setIsComposeWizardOpen(false)
+    }
+  }, [inputMessage])
+
   const handleSendMessage = async (e: React.FormEvent, files: File[]) => {
     if (open) {
       setOpen(false)
     }
     setOpenMobile(false)
-    await sendMessage(e, files)
+
+    // Auto-enable artifact editor tool when document artifact is selected
+    let additionalTools: string[] | undefined = undefined
+    let artifactContext: string | undefined = undefined
+
+    if (selectedArtifactId) {
+      const selectedArtifact = artifacts.find(a => a.id === selectedArtifactId)
+      if (selectedArtifact && selectedArtifact.type === 'document') {
+        additionalTools = ['update_artifact']
+
+        // Build system prompt with artifact context
+        const contentPreview = selectedArtifact.content.length > 1000
+          ? selectedArtifact.content.substring(0, 1000) + '...'
+          : selectedArtifact.content
+
+        artifactContext = `# ARTIFACT CONTEXT
+
+The user currently has a document artifact open:
+- **Title**: ${selectedArtifact.title}
+- **Type**: ${selectedArtifact.type}
+- **Current Content Preview**:
+\`\`\`
+${contentPreview}
+\`\`\`
+
+If the user asks to modify this document, use the update_artifact tool to find and replace specific text.`
+      }
+    }
+
+    await sendMessage(e, files, additionalTools, artifactContext, selectedArtifactId)
   }
 
   // Interrupt approval handlers
@@ -691,6 +948,11 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Don't handle Enter/Escape when compose wizard is open (handled by wizard)
+    if (isComposeWizardOpen && (e.key === "Enter" || e.key === "Escape" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      return
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       // Don't submit if user is composing Korean/Chinese/Japanese
       if (isComposingRef.current) {
@@ -708,8 +970,8 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
       }
 
       e.preventDefault()
-      // Don't submit if voice mode is active (uses unified agentStatus)
-      if (agentStatus === 'idle' && (inputMessage.trim() || selectedFiles.length > 0)) {
+      // Don't submit if voice mode is active or compose workflow in progress
+      if (agentStatus === 'idle' && !composer.isComposing && (inputMessage.trim() || selectedFiles.length > 0)) {
         const syntheticEvent = {
           preventDefault: () => {},
         } as React.FormEvent
@@ -786,10 +1048,15 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
         sessionId={sessionId}
         onNewChat={handleNewChat}
         loadSession={handleLoadSession}
+        theme={theme}
+        setTheme={setTheme}
       />
 
       {/* Main Chat Area - unified layout for both modes */}
-      <SidebarInset className={`h-screen flex flex-col overflow-hidden ${groupedMessages.length === 0 ? 'justify-center items-center' : ''} transition-all duration-700 ease-in-out relative`}>
+      <SidebarInset
+        className={`h-screen flex flex-col overflow-hidden ${groupedMessages.length === 0 ? 'justify-center items-center' : ''} transition-all duration-300 ease-in-out relative`}
+        style={{ marginRight: isCanvasOpen && !isMobileView ? '950px' : '0' }}
+      >
         {/* Sidebar trigger - Always visible in top-left */}
         {groupedMessages.length === 0 && (
           <div className={`absolute top-4 left-4 z-20`}>
@@ -797,18 +1064,38 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
           </div>
         )}
 
-        {/* Theme toggle - Always visible in top-right */}
-        {groupedMessages.length === 0 && mounted && (
+        {/* Theme toggle & Artifact button - Always visible in top-right */}
+        {/* Artifact button - Always visible in top-right */}
+        {groupedMessages.length === 0 && mounted && !isMobileView && (
           <div className={`absolute top-4 right-4 z-20`}>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="h-9 w-9 p-0 hover:bg-muted/60"
-              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            >
-              {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-            </Button>
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={toggleCanvas}
+                    className={`h-9 w-9 p-0 hover:bg-muted/60 relative ${isCanvasOpen ? 'bg-muted' : ''}`}
+                    title="Canvas"
+                  >
+                    <Sparkles className="h-5 w-5" />
+                    {artifacts.length > 0 && (
+                      <span className="absolute -top-1 -right-1 h-4 w-4 bg-primary text-primary-foreground text-[10px] font-bold rounded-full flex items-center justify-center">
+                        {artifacts.length}
+                      </span>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>
+                    {artifacts.length > 0
+                      ? `View Canvas (${artifacts.length})`
+                      : 'No artifacts yet'
+                    }
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         )}
 
@@ -849,17 +1136,36 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
               {/* Browser Live View Button */}
               <BrowserLiveViewButton sessionId={sessionId} browserSession={browserSession} />
 
-              {/* Theme Toggle */}
-              {mounted && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                  className="h-8 w-8 p-0 hover:bg-muted/60"
-                  title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-                >
-                  {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                </Button>
+              {/* Canvas Toggle - Hidden on mobile */}
+              {!isMobileView && (
+                <TooltipProvider delayDuration={300}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={toggleCanvas}
+                        className={`h-8 w-8 p-0 hover:bg-muted/60 relative ${isCanvasOpen ? 'bg-muted' : ''}`}
+                        title="Canvas"
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        {artifacts.length > 0 && (
+                          <span className="absolute -top-1 -right-1 h-4 w-4 bg-primary text-primary-foreground text-[10px] font-bold rounded-full flex items-center justify-center">
+                            {artifacts.length}
+                          </span>
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>
+                        {artifacts.length > 0
+                          ? `View Canvas (${artifacts.length})`
+                          : 'No artifacts yet'
+                        }
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )}
             </div>
           </div>
@@ -1042,12 +1348,16 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                     isComposingRef.current = false
                   }}
                   placeholder={
-                    isVoiceActive
+                    composer.showOutlineConfirm
+                      ? "Please review the outline in the Canvas"
+                      : composer.isComposing
+                      ? "Document is being composed..."
+                      : isVoiceActive
                       ? "Voice mode active - click mic to stop"
                       : "Ask me anything..."
                   }
-                  className="flex-1 min-h-[52px] max-h-36 border-0 focus:ring-0 resize-none py-2 px-1 text-base leading-relaxed overflow-y-auto bg-transparent transition-all duration-200 placeholder:text-muted-foreground/60"
-                  disabled={agentStatus !== 'idle'}
+                  className="flex-1 min-h-[52px] max-h-36 border-0 focus:ring-0 resize-none py-2 px-1 text-lg leading-relaxed overflow-y-auto bg-transparent transition-all duration-200 placeholder:text-muted-foreground/60"
+                  disabled={agentStatus !== 'idle' || composer.showOutlineConfirm || composer.isComposing}
                   rows={1}
                 />
                 {/* Voice & Send buttons */}
@@ -1062,15 +1372,19 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                             variant="ghost"
                             size="sm"
                             onClick={async () => {
+                              if (composer.showOutlineConfirm) return
                               if (!isVoiceActive) {
                                 await connectVoice()
                               } else {
                                 disconnectVoice()
                               }
                             }}
+                            disabled={composer.showOutlineConfirm}
                             className={`h-9 w-9 p-0 rounded-xl transition-all duration-200 ${
-                              agentStatus === 'voice_listening'
-                                ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
+                              composer.showOutlineConfirm
+                                ? 'opacity-40 cursor-not-allowed'
+                                : agentStatus === 'voice_listening'
+                                ? 'bg-red-500 hover:bg-red-600 text-white'
                                 : agentStatus === 'voice_speaking'
                                 ? 'bg-green-500 hover:bg-green-600 text-white'
                                 : agentStatus === 'voice_connecting' || agentStatus === 'voice_processing'
@@ -1080,6 +1394,10 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                           >
                             {agentStatus === 'voice_connecting' ? (
                               <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : agentStatus === 'voice_listening' ? (
+                              <VoiceAnimation type="listening" />
+                            ) : agentStatus === 'voice_speaking' ? (
+                              <VoiceAnimation type="speaking" />
                             ) : (
                               <Mic className="w-4 h-4" />
                             )}
@@ -1122,11 +1440,11 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                       type="button"
                       onClick={async (e) => {
                         e.preventDefault()
-                        if (agentStatus !== 'idle' || (!inputMessage.trim() && selectedFiles.length === 0)) return
+                        if (agentStatus !== 'idle' || composer.showOutlineConfirm || composer.isComposing || (!inputMessage.trim() && selectedFiles.length === 0)) return
                         await handleSendMessage(e as any, selectedFiles)
                         setSelectedFiles([])
                       }}
-                      disabled={agentStatus !== 'idle' || (!inputMessage.trim() && selectedFiles.length === 0)}
+                      disabled={agentStatus !== 'idle' || composer.showOutlineConfirm || composer.isComposing || (!inputMessage.trim() && selectedFiles.length === 0)}
                       size="sm"
                       className="h-9 w-9 p-0 gradient-primary hover:opacity-90 text-primary-foreground rounded-xl transition-all duration-200 disabled:opacity-40"
                     >
@@ -1149,7 +1467,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                         variant="ghost"
                         size="sm"
                         onClick={() => document.getElementById("file-upload")?.click()}
-                        disabled={isVoiceActive}
+                        disabled={isVoiceActive || composer.showOutlineConfirm}
                         className="h-9 w-9 p-0 hover:bg-muted-foreground/10 transition-all duration-200 disabled:opacity-40 text-muted-foreground"
                       >
                         <Upload className="w-4 h-4" />
@@ -1163,7 +1481,7 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                   <ToolsDropdown
                     availableTools={availableTools}
                     onToggleTool={toggleTool}
-                    disabled={isResearchEnabled || isVoiceActive}
+                    disabled={isResearchEnabled || isVoiceActive || composer.showOutlineConfirm || isCanvasOpen}
                     autoEnabled={swarmEnabled}
                     onToggleAuto={toggleSwarm}
                   />
@@ -1175,11 +1493,11 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
                         variant="ghost"
                         size="sm"
                         onClick={toggleResearchAgent}
-                        disabled={isVoiceActive}
+                        disabled={isVoiceActive || composer.showOutlineConfirm}
                         className={`h-9 w-9 p-0 transition-all duration-200 ${
                           isResearchEnabled
                             ? 'bg-blue-500/15 hover:bg-blue-500/25 text-blue-500'
-                            : isVoiceActive
+                            : (isVoiceActive || composer.showOutlineConfirm)
                             ? 'opacity-40 cursor-not-allowed'
                             : 'hover:bg-muted-foreground/10 text-muted-foreground'
                         }`}
@@ -1252,7 +1570,42 @@ export function ChatInterface({ mode }: ChatInterfaceProps) {
         />
       )}
 
+      {/* Compose Wizard */}
+      <ComposeWizard
+        isOpen={isComposeWizardOpen}
+        onComplete={handleComposeComplete}
+        onClose={() => setIsComposeWizardOpen(false)}
+        inputRect={inputRect}
+      />
 
+      {/* Canvas */}
+      <Canvas
+        isOpen={isCanvasOpen}
+        onClose={closeCanvas}
+        artifacts={artifacts}
+        selectedArtifactId={selectedArtifactId}
+        onSelectArtifact={openArtifact}
+        justUpdated={artifactJustUpdated}
+        composeState={composeArtifactId && selectedArtifactId === composeArtifactId ? {
+          isComposing: composer.isComposing,
+          progress: composer.progress,
+          outline: composer.outline,
+          showOutlineConfirm: composer.showOutlineConfirm,
+          outlineAttempt: composer.outlineAttempt,
+          documentParts: composer.documentParts,
+          completedDocument: composer.completedDocument,
+          onConfirmOutline: composer.confirmOutlineResponse,
+          onCancel: () => {
+            composer.reset()
+            // Remove compose artifact
+            if (composeArtifactId) {
+              removeArtifact(composeArtifactId)
+            }
+            setComposeArtifactId(null)
+            closeCanvas()
+          },
+        } : undefined}
+      />
     </>
   )
 }

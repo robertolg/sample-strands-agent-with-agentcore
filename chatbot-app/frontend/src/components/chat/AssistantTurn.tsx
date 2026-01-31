@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Clock, Zap, Coins, Copy, ThumbsUp, ThumbsDown, Check, FileText, Download, FileSpreadsheet, Presentation, AudioWaveform } from 'lucide-react'
+import { Clock, Zap, Coins, Copy, ThumbsUp, ThumbsDown, Check, FileText, Download, FileSpreadsheet, Presentation, AudioWaveform, Sparkles } from 'lucide-react'
 import { AIIcon } from '@/components/ui/AIIcon'
 import { Message } from '@/types/chat'
 import { ReasoningState } from '@/types/events'
@@ -12,6 +12,39 @@ import { ToolExecutionContainer } from './ToolExecutionContainer'
 import { ResearchContainer } from '@/components/ResearchContainer'
 import { LazyImage } from '@/components/ui/LazyImage'
 import { fetchAuthSession } from 'aws-amplify/auth'
+
+// Parse artifact creation message pattern
+const parseArtifactMessage = (text: string): { title: string; wordCount: number } | null => {
+  // Try with markdown bold first
+  let match = text.match(/Document \*\*(.+?)\*\* has been created\.\s*\((\d+) words\)/)
+  if (match) {
+    return { title: match[1].trim(), wordCount: parseInt(match[2], 10) }
+  }
+  // Try without markdown bold
+  match = text.match(/Document (.+?) has been created\.\s*\((\d+) words\)/)
+  if (match) {
+    return { title: match[1].trim(), wordCount: parseInt(match[2], 10) }
+  }
+  return null
+}
+
+// Minimal artifact notification - shown instead of text for artifact creation messages
+const ArtifactNotification = ({ title, wordCount }: { title: string; wordCount: number }) => {
+  const handleClick = () => {
+    window.dispatchEvent(new CustomEvent('open-artifact-by-title', { detail: { title } }))
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      className="inline-flex items-center gap-2.5 text-base text-muted-foreground hover:text-foreground transition-colors h-9"
+    >
+      <Sparkles className="w-4 h-4" />
+      <span className="font-medium">{title}</span>
+      <span className="text-sm opacity-60">· {wordCount.toLocaleString()} words</span>
+    </button>
+  )
+}
 
 interface AssistantTurnProps {
   messages: Message[]
@@ -196,12 +229,13 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
   // Group consecutive text messages together while preserving tool message positions
   const groupedContent = useMemo(() => {
     const grouped: Array<{
-      type: 'text' | 'tool'
+      type: 'text' | 'tool' | 'artifact'
       content: string | Message
       images?: any[]
       key: string
       toolUseId?: string
       isStreaming?: boolean
+      artifact?: { title: string; wordCount: number }
     }> = []
 
     let currentTextGroup = ''
@@ -259,6 +293,18 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
           type: 'tool',
           content: message,
           key: `tool-${message.id}`
+        })
+      } else if (message.artifactReference) {
+        // Artifact reference from real-time update
+        flushTextGroup()
+        grouped.push({
+          type: 'artifact',
+          content: '',
+          key: `artifact-${message.id}`,
+          artifact: {
+            title: message.artifactReference.title,
+            wordCount: message.artifactReference.wordCount || 0
+          }
         })
       } else if (message.text) {
         // Text-only message - accumulate
@@ -458,12 +504,34 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
               )
             }
 
+            // Handle artifact type (real-time updates via artifactReference)
+            if (item.type === 'artifact' && item.artifact) {
+              return (
+                <div key={item.key} className="animate-fade-in">
+                  <ArtifactNotification title={item.artifact.title} wordCount={item.artifact.wordCount} />
+                </div>
+              )
+            }
+
+            // Check for artifact creation pattern (history load)
+            const textContent = item.content as string
+            const artifact = parseArtifactMessage(textContent)
+
+            // If this is an artifact message, render as notification
+            if (artifact) {
+              return (
+                <div key={item.key} className="animate-fade-in">
+                  <ArtifactNotification title={artifact.title} wordCount={artifact.wordCount} />
+                </div>
+              )
+            }
+
             return (
               <div key={item.key} className="animate-fade-in">
                 <div className="chat-chart-content w-full overflow-hidden">
                   {/* Use StreamingText for smooth typing animation during streaming */}
                   <StreamingText
-                    text={item.content as string}
+                    text={textContent}
                     isStreaming={item.isStreaming || false}
                     sessionId={sessionId}
                     toolUseId={item.toolUseId}

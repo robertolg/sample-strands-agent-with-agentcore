@@ -61,6 +61,13 @@ export interface Message {
   }
   // Voice mode marker
   isVoiceMessage?: boolean
+  // Artifact reference (for composer workflow results)
+  artifactReference?: {
+    id: string
+    type: string
+    title: string
+    wordCount?: number
+  }
 }
 
 export interface Tool {

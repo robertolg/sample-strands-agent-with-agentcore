@@ -33,8 +33,9 @@ class InvocationInput(BaseModel):
     enabled_tools: Optional[List[str]] = None  # User-specific tool preferences
     files: Optional[List[FileContent]] = None  # Multimodal file attachments
     compaction_enabled: Optional[bool] = None
-    swarm: Optional[bool] = None  # Enable multi-agent swarm mode
     warmup: Optional[bool] = None
+    request_type: Optional[str] = None  # Request type: "normal" (default), "swarm", "compose"
+    selected_artifact_id: Optional[str] = None  # Currently selected artifact for tool context
 
 
 class InvocationRequest(BaseModel):

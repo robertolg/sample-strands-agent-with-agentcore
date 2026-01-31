@@ -24,8 +24,7 @@ class TestPingEndpoint:
 
     def test_ping_returns_healthy(self):
         """Test that ping returns healthy status."""
-        # Note: /ping endpoint is in health router, not chat router
-        from routers.health import router
+        from routers.chat import router
         from fastapi import FastAPI
 
         app = FastAPI()
@@ -35,12 +34,11 @@ class TestPingEndpoint:
         response = client.get("/ping")
 
         assert response.status_code == 200
-        assert response.json() == {"status": "pong"}
+        assert response.json() == {"status": "healthy"}
 
     def test_ping_is_get_method(self):
         """Test that ping only accepts GET requests."""
-        # Note: /ping endpoint is in health router, not chat router
-        from routers.health import router
+        from routers.chat import router
         from fastapi import FastAPI
 
         app = FastAPI()
@@ -53,79 +51,74 @@ class TestPingEndpoint:
 
 
 # ============================================================
-# Agent Creation Tests
+# Agent Factory Tests
 # ============================================================
 
-class TestGetAgent:
-    """Tests for the get_agent function."""
+class TestAgentFactory:
+    """Tests for the agent factory integration."""
 
-    @patch('routers.chat.ChatbotAgent')
-    def test_creates_agent_with_session_id(self, mock_agent_class):
-        """Test that agent is created with session ID."""
-        from routers.chat import get_agent
+    @patch('routers.chat.create_agent')
+    def test_creates_chat_agent_by_default(self, mock_factory):
+        """Test that normal mode creates ChatAgent."""
+        from routers.chat import router
+        from fastapi import FastAPI
 
-        get_agent(session_id="test-session-123")
+        mock_agent = MagicMock()
+        async def mock_stream(*args, **kwargs):
+            yield 'data: {"type": "complete"}\n\n'
+        mock_agent.stream_async = mock_stream
+        mock_factory.return_value = mock_agent
 
-        mock_agent_class.assert_called_once()
-        call_kwargs = mock_agent_class.call_args.kwargs
-        assert call_kwargs['session_id'] == "test-session-123"
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
 
-    @patch('routers.chat.ChatbotAgent')
-    def test_creates_agent_with_user_id(self, mock_agent_class):
-        """Test that agent is created with user ID."""
-        from routers.chat import get_agent
-
-        get_agent(session_id="session", user_id="user-456")
-
-        call_kwargs = mock_agent_class.call_args.kwargs
-        assert call_kwargs['user_id'] == "user-456"
-
-    @patch('routers.chat.ChatbotAgent')
-    def test_creates_agent_with_enabled_tools(self, mock_agent_class):
-        """Test that agent is created with enabled tools."""
-        from routers.chat import get_agent
-
-        tools = ["calculator", "web_search"]
-        get_agent(session_id="session", enabled_tools=tools)
-
-        call_kwargs = mock_agent_class.call_args.kwargs
-        assert call_kwargs['enabled_tools'] == tools
-
-    @patch('routers.chat.ChatbotAgent')
-    def test_creates_agent_with_model_config(self, mock_agent_class):
-        """Test that agent is created with model configuration."""
-        from routers.chat import get_agent
-
-        get_agent(
-            session_id="session",
-            model_id="claude-3-sonnet",
-            temperature=0.5
+        client.post(
+            "/invocations",
+            json={
+                "input": {
+                    "user_id": "test-user",
+                    "session_id": "test-session-123",
+                    "message": "Hello"
+                }
+            }
         )
 
-        call_kwargs = mock_agent_class.call_args.kwargs
-        assert call_kwargs['model_id'] == "claude-3-sonnet"
-        assert call_kwargs['temperature'] == 0.5
+        mock_factory.assert_called_once()
+        call_kwargs = mock_factory.call_args.kwargs
+        assert call_kwargs['request_type'] == "normal"
+        assert call_kwargs['session_id'] == "test-session-123"
 
-    @patch('routers.chat.ChatbotAgent')
-    def test_creates_agent_with_system_prompt(self, mock_agent_class):
-        """Test that agent is created with custom system prompt."""
-        from routers.chat import get_agent
+    @patch('routers.chat.create_agent')
+    def test_creates_swarm_agent_for_swarm_mode(self, mock_factory):
+        """Test that swarm mode creates SwarmAgent."""
+        from routers.chat import router
+        from fastapi import FastAPI
 
-        prompt = "You are a helpful assistant."
-        get_agent(session_id="session", system_prompt=prompt)
+        mock_agent = MagicMock()
+        async def mock_stream(*args, **kwargs):
+            yield 'data: {"type": "complete"}\n\n'
+        mock_agent.stream_async = mock_stream
+        mock_factory.return_value = mock_agent
 
-        call_kwargs = mock_agent_class.call_args.kwargs
-        assert call_kwargs['system_prompt'] == prompt
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
 
-    @patch('routers.chat.ChatbotAgent')
-    def test_creates_agent_with_caching_disabled(self, mock_agent_class):
-        """Test that agent can be created with caching disabled."""
-        from routers.chat import get_agent
+        client.post(
+            "/invocations",
+            json={
+                "input": {
+                    "user_id": "test-user",
+                    "session_id": "test",
+                    "message": "Hello",
+                    "request_type": "swarm"
+                }
+            }
+        )
 
-        get_agent(session_id="session", caching_enabled=False)
-
-        call_kwargs = mock_agent_class.call_args.kwargs
-        assert call_kwargs['caching_enabled'] is False
+        call_kwargs = mock_factory.call_args.kwargs
+        assert call_kwargs['request_type'] == "swarm"
 
 
 # ============================================================
@@ -263,10 +256,10 @@ class TestInvocationsEndpoint:
         agent.stream_async = mock_stream
         return agent
 
-    @patch('routers.chat.get_agent')
-    def test_invocations_returns_streaming_response(self, mock_get_agent, mock_agent):
+    @patch('routers.chat.create_agent')
+    def test_invocations_returns_streaming_response(self, mock_factory, mock_agent):
         """Test that invocations returns SSE streaming response."""
-        mock_get_agent.return_value = mock_agent
+        mock_factory.return_value = mock_agent
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -289,10 +282,10 @@ class TestInvocationsEndpoint:
         assert response.status_code == 200
         assert response.headers.get("content-type") == "text/event-stream; charset=utf-8"
 
-    @patch('routers.chat.get_agent')
-    def test_invocations_sets_session_header(self, mock_get_agent, mock_agent):
+    @patch('routers.chat.create_agent')
+    def test_invocations_sets_session_header(self, mock_factory, mock_agent):
         """Test that invocations sets X-Session-ID header."""
-        mock_get_agent.return_value = mock_agent
+        mock_factory.return_value = mock_agent
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -314,10 +307,10 @@ class TestInvocationsEndpoint:
 
         assert response.headers.get("x-session-id") == "my-session-123"
 
-    @patch('routers.chat.get_agent')
-    def test_invocations_passes_enabled_tools(self, mock_get_agent, mock_agent):
+    @patch('routers.chat.create_agent')
+    def test_invocations_passes_enabled_tools(self, mock_factory, mock_agent):
         """Test that enabled tools are passed to agent."""
-        mock_get_agent.return_value = mock_agent
+        mock_factory.return_value = mock_agent
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -338,14 +331,14 @@ class TestInvocationsEndpoint:
             }
         )
 
-        mock_get_agent.assert_called_once()
-        call_kwargs = mock_get_agent.call_args.kwargs
+        mock_factory.assert_called_once()
+        call_kwargs = mock_factory.call_args.kwargs
         assert call_kwargs['enabled_tools'] == ["calculator", "web_search"]
 
-    @patch('routers.chat.get_agent')
-    def test_invocations_handles_files(self, mock_get_agent, mock_agent):
+    @patch('routers.chat.create_agent')
+    def test_invocations_handles_files(self, mock_factory, mock_agent):
         """Test that files are passed to agent stream."""
-        mock_get_agent.return_value = mock_agent
+        mock_factory.return_value = mock_agent
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -391,10 +384,10 @@ class TestInterruptResponseHandling:
         agent.stream_async = mock_stream
         return agent
 
-    @patch('routers.chat.get_agent')
-    def test_parses_interrupt_response(self, mock_get_agent, mock_agent):
+    @patch('routers.chat.create_agent')
+    def test_parses_interrupt_response(self, mock_factory, mock_agent):
         """Test that interrupt response is parsed from JSON array."""
-        mock_get_agent.return_value = mock_agent
+        mock_factory.return_value = mock_agent
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -425,10 +418,10 @@ class TestInterruptResponseHandling:
         assert response.status_code == 200
         # Response 200 confirms agent stream was invoked successfully
 
-    @patch('routers.chat.get_agent')
-    def test_handles_normal_message_not_json(self, mock_get_agent, mock_agent):
+    @patch('routers.chat.create_agent')
+    def test_handles_normal_message_not_json(self, mock_factory, mock_agent):
         """Test that normal text messages are not parsed as interrupt."""
-        mock_get_agent.return_value = mock_agent
+        mock_factory.return_value = mock_agent
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -450,10 +443,10 @@ class TestInterruptResponseHandling:
 
         assert response.status_code == 200
 
-    @patch('routers.chat.get_agent')
-    def test_handles_json_without_interrupt_response(self, mock_get_agent, mock_agent):
+    @patch('routers.chat.create_agent')
+    def test_handles_json_without_interrupt_response(self, mock_factory, mock_agent):
         """Test that JSON without interruptResponse is treated as normal."""
-        mock_get_agent.return_value = mock_agent
+        mock_factory.return_value = mock_agent
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -484,10 +477,10 @@ class TestInterruptResponseHandling:
 class TestInvocationsErrorHandling:
     """Tests for error handling in invocations endpoint."""
 
-    @patch('routers.chat.get_agent')
-    def test_returns_500_on_agent_error(self, mock_get_agent):
+    @patch('routers.chat.create_agent')
+    def test_returns_500_on_agent_error(self, mock_factory):
         """Test that 500 is returned when agent fails."""
-        mock_get_agent.side_effect = Exception("Agent creation failed")
+        mock_factory.side_effect = Exception("Agent creation failed")
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -546,10 +539,10 @@ class TestModelConfiguration:
         agent.stream_async = mock_stream
         return agent
 
-    @patch('routers.chat.get_agent')
-    def test_passes_model_id(self, mock_get_agent, mock_agent):
+    @patch('routers.chat.create_agent')
+    def test_passes_model_id(self, mock_factory, mock_agent):
         """Test that model_id is passed to agent."""
-        mock_get_agent.return_value = mock_agent
+        mock_factory.return_value = mock_agent
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -570,13 +563,13 @@ class TestModelConfiguration:
             }
         )
 
-        call_kwargs = mock_get_agent.call_args.kwargs
+        call_kwargs = mock_factory.call_args.kwargs
         assert call_kwargs['model_id'] == "claude-3-opus"
 
-    @patch('routers.chat.get_agent')
-    def test_passes_temperature(self, mock_get_agent, mock_agent):
+    @patch('routers.chat.create_agent')
+    def test_passes_temperature(self, mock_factory, mock_agent):
         """Test that temperature is passed to agent."""
-        mock_get_agent.return_value = mock_agent
+        mock_factory.return_value = mock_agent
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -597,13 +590,13 @@ class TestModelConfiguration:
             }
         )
 
-        call_kwargs = mock_get_agent.call_args.kwargs
+        call_kwargs = mock_factory.call_args.kwargs
         assert call_kwargs['temperature'] == 0.3
 
-    @patch('routers.chat.get_agent')
-    def test_passes_system_prompt(self, mock_get_agent, mock_agent):
+    @patch('routers.chat.create_agent')
+    def test_passes_system_prompt(self, mock_factory, mock_agent):
         """Test that system_prompt is passed to agent."""
-        mock_get_agent.return_value = mock_agent
+        mock_factory.return_value = mock_agent
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -624,5 +617,5 @@ class TestModelConfiguration:
             }
         )
 
-        call_kwargs = mock_get_agent.call_args.kwargs
+        call_kwargs = mock_factory.call_args.kwargs
         assert call_kwargs['system_prompt'] == "You are a coding assistant."

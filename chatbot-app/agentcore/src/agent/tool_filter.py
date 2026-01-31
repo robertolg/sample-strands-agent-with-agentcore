@@ -6,7 +6,7 @@ Consolidates tool filtering logic for all tool sources:
 - Gateway MCP tools (gateway_* prefix)
 - A2A Agent tools (agentcore_* prefix)
 
-This module eliminates code duplication between ChatbotAgent and VoiceChatbotAgent.
+This module eliminates code duplication between ChatbotAgent and VoiceAgent.
 """
 
 import logging

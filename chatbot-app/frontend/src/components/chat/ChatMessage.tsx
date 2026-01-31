@@ -1,11 +1,56 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { Badge } from '@/components/ui/badge'
-import { FileText, Image, ChevronDown, ChevronUp, Copy, Check, Mic } from 'lucide-react'
+import { FileText, Image, ChevronDown, ChevronUp, Copy, Check, Mic, Sparkles } from 'lucide-react'
 import { Message } from '@/types/chat'
 import { Markdown } from '@/components/ui/Markdown'
 import { ToolExecutionContainer } from './ToolExecutionContainer'
 import { LazyImage } from '@/components/ui/LazyImage'
 import { AIIcon } from '@/components/ui/AIIcon'
+
+// Check if this is a compose request JSON (user message to hide)
+const isComposeRequest = (text: string): boolean => {
+  try {
+    const data = JSON.parse(text)
+    return !!(data.document_type && 'topic' in data)
+  } catch {
+    return false
+  }
+}
+
+// Parse artifact creation message pattern
+const parseArtifactMessage = (text: string): { title: string; wordCount: number } | null => {
+  // Try with markdown bold first
+  let match = text.match(/Document \*\*(.+?)\*\* has been created\.\s*\((\d+) words\)/)
+  if (match) {
+    return { title: match[1].trim(), wordCount: parseInt(match[2], 10) }
+  }
+  // Try without markdown bold
+  match = text.match(/Document (.+?) has been created\.\s*\((\d+) words\)/)
+  if (match) {
+    return { title: match[1].trim(), wordCount: parseInt(match[2], 10) }
+  }
+  return null
+}
+
+// Minimal artifact notification - shown instead of user+assistant message pair
+const ArtifactNotification = ({ title, wordCount }: { title: string; wordCount: number }) => {
+  const handleClick = () => {
+    window.dispatchEvent(new CustomEvent('open-artifact-by-title', { detail: { title } }))
+  }
+
+  return (
+    <div className="flex justify-start mb-4">
+      <button
+        onClick={handleClick}
+        className="flex items-center gap-3 py-2 px-4 rounded-lg border border-violet-200 dark:border-violet-800 bg-violet-50/50 dark:bg-violet-950/20 hover:bg-violet-100/50 dark:hover:bg-violet-900/30 transition-colors text-left"
+      >
+        <Sparkles className="w-4 h-4 text-violet-500 flex-shrink-0" />
+        <span className="text-sm font-medium text-foreground">{title}</span>
+        <span className="text-xs text-muted-foreground">{wordCount.toLocaleString()} words</span>
+      </button>
+    </div>
+  )
+}
 
 interface ChatMessageProps {
   message: Message
@@ -75,6 +120,11 @@ export const ChatMessage = React.memo<ChatMessageProps>(({ message, sessionId })
   }, [message.text])
 
   if (message.sender === 'user') {
+    // Hide compose request messages (they're shown combined with artifact result)
+    if (isComposeRequest(message.text)) {
+      return null
+    }
+
     return (
       <div className="flex justify-end mb-8 animate-slide-in group">
         <div className="flex items-start max-w-3xl">
@@ -120,6 +170,21 @@ export const ChatMessage = React.memo<ChatMessageProps>(({ message, sessionId })
     )
   }
 
+  // Handle artifact messages - check artifactReference first (real-time), then text pattern (history)
+  if (message.artifactReference) {
+    console.log('[ChatMessage] Rendering artifact via artifactReference:', message.artifactReference.title)
+    return <ArtifactNotification title={message.artifactReference.title} wordCount={message.artifactReference.wordCount || 0} />
+  }
+
+  // Check for artifact creation pattern in text
+  if (message.text && message.text.includes('has been created.') && message.text.includes('words)')) {
+    const artifact = parseArtifactMessage(message.text)
+    console.log('[ChatMessage] Text check:', message.text.substring(0, 80), 'artifact:', artifact)
+    if (artifact) {
+      return <ArtifactNotification title={artifact.title} wordCount={artifact.wordCount} />
+    }
+  }
+
   // Handle tool execution messages separately - No background box
   if (message.isToolMessage && message.toolExecutions && message.toolExecutions.length > 0) {
     return (
@@ -150,7 +215,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(({ message, sessionId })
               <ToolExecutionContainer toolExecutions={message.toolExecutions} compact={true} sessionId={sessionId} />
             </div>
           )}
-          
+
           <div className="w-full overflow-hidden">
             <Markdown size="2xl" sessionId={sessionId}>{message.text}</Markdown>
             
@@ -200,5 +265,6 @@ export const ChatMessage = React.memo<ChatMessageProps>(({ message, sessionId })
   return prevProps.message.id === nextProps.message.id &&
          prevProps.message.text === nextProps.message.text &&
          prevProps.message.isStreaming === nextProps.message.isStreaming &&
+         prevProps.message.artifactReference?.id === nextProps.message.artifactReference?.id &&
          prevProps.sessionId === nextProps.sessionId
 })

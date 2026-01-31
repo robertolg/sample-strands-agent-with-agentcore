@@ -397,3 +397,59 @@ export function getSessionMessages(sessionId: string): any[] {
     return []
   }
 }
+
+/**
+ * Get artifacts for a session from agent state
+ */
+export function getSessionArtifacts(sessionId: string): any[] {
+  try {
+    // Validate sessionId to prevent path traversal
+    if (!validateSessionId(sessionId)) {
+      console.error(`[LocalSessionStore] Invalid sessionId format: ${sessionId}`)
+      throw new Error('Invalid session ID format')
+    }
+
+    // Path to AgentCore Runtime storage
+    const agentcoreSessionsDir = path.join(process.cwd(), '..', 'agentcore', 'sessions')
+    const sessionDir = path.join(agentcoreSessionsDir, `session_${sessionId}`)
+
+    // Verify sessionDir stays within agentcoreSessionsDir
+    if (!isPathWithinBase(sessionDir, agentcoreSessionsDir)) {
+      console.error(`[LocalSessionStore] Path traversal attempt detected for sessionId: ${sessionId}`)
+      return []
+    }
+
+    if (!fs.existsSync(sessionDir)) {
+      console.log(`[LocalSessionStore] Session directory not found for artifacts: ${sessionDir}`)
+      return []
+    }
+
+    // Read agent.json from default agent (artifacts are stored in ChatAgent state)
+    const agentDir = path.join(sessionDir, 'agents', 'agent_default')
+    const agentJsonPath = path.join(agentDir, 'agent.json')
+
+    // Verify agentJsonPath stays within agentcoreSessionsDir
+    if (!isPathWithinBase(agentJsonPath, agentcoreSessionsDir)) {
+      console.error(`[LocalSessionStore] Path traversal attempt detected for agent.json`)
+      return []
+    }
+
+    if (!fs.existsSync(agentJsonPath)) {
+      console.log(`[LocalSessionStore] No agent.json found for artifacts`)
+      return []
+    }
+
+    // Read and parse agent.json
+    const agentData = JSON.parse(fs.readFileSync(agentJsonPath, 'utf-8'))
+    const artifacts = agentData?.state?.artifacts || {}
+
+    // Convert artifacts object to array
+    const artifactsArray = Object.values(artifacts)
+
+    console.log(`[LocalSessionStore] Loaded ${artifactsArray.length} artifacts for session ${sessionId}`)
+    return artifactsArray
+  } catch (error) {
+    console.error('[LocalSessionStore] Failed to load session artifacts:', error)
+    return []
+  }
+}

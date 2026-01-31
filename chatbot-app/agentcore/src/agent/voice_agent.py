@@ -1,8 +1,9 @@
 """
-VoiceChatbotAgent for Agent Core
+VoiceAgent for Agent Core
 - Uses Strands BidiAgent for real-time speech-to-speech interaction
 - Nova Sonic model for bidirectional audio streaming
-- Shared tool registry with ChatbotAgent
+- Inherits from BaseAgent for unified architecture
+- Shared tool registry with ChatAgent
 - Session management integration for seamless voice-text conversation continuity
 """
 
@@ -39,26 +40,15 @@ from strands.experimental.bidi.types.events import (
 from strands.types._events import ToolUseStreamEvent, ToolResultEvent
 from strands.experimental.bidi.models.nova_sonic import BidiNovaSonicModel
 
+# Import BaseAgent for inheritance
+from agents.base import BaseAgent
 # Import prompt builder for dynamic system prompt
 from agent.config.prompt_builder import build_voice_system_prompt
-# Import unified tool filter (shared with ChatbotAgent)
-from agent.tool_filter import filter_tools
-# Import unified file session manager for cross-agent history sharing (local mode)
-from agent.session.unified_file_session_manager import UnifiedFileSessionManager
-
-# AgentCore Memory integration (optional, only for cloud deployment)
-try:
-    from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
-    from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
-    from agent.session.compacting_session_manager import CompactingSessionManager
-    AGENTCORE_MEMORY_AVAILABLE = True
-except ImportError:
-    AGENTCORE_MEMORY_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 
-class VoiceChatbotAgent:
+class VoiceAgent(BaseAgent):
     """Voice-enabled agent using BidiAgent and Nova Sonic for speech-to-speech"""
 
     # Use separate agent_id from text mode to avoid session state conflicts
@@ -90,22 +80,19 @@ class VoiceChatbotAgent:
             enabled_tools: List of tool IDs to enable
             system_prompt: Optional system prompt override
         """
-        self.session_id = session_id
-        self.user_id = user_id or session_id
-        self.enabled_tools = enabled_tools or []
-        self.gateway_client = None  # Store Gateway MCP client for lifecycle management
+        # Initialize base agent (handles session_id, user_id, enabled_tools, gateway_client, tools, session_manager)
+        super().__init__(
+            session_id=session_id,
+            user_id=user_id,
+            enabled_tools=enabled_tools,
+            model_id=None,  # BidiAgent doesn't use model_id the same way
+            system_prompt=system_prompt,
+            caching_enabled=False,  # Voice mode doesn't use prompt caching
+            compaction_enabled=False,  # Voice mode doesn't use compaction
+        )
 
-        logger.info(f"[VoiceAgent] Initializing with enabled_tools: {self.enabled_tools}")
-
-        # Build system prompt for voice mode (dynamic based on enabled tools)
-        self.system_prompt = system_prompt or build_voice_system_prompt(self.enabled_tools)
-
-        # Get filtered tools (shared with ChatbotAgent)
-        self.tools = self._get_filtered_tools()
+        logger.info(f"[VoiceAgent] Initialized with enabled_tools: {self.enabled_tools}")
         logger.info(f"[VoiceAgent] Filtered tools count: {len(self.tools)}")
-
-        # Initialize session manager (same as ChatbotAgent for seamless voice-text continuity)
-        self.session_manager = self._create_session_manager()
 
         # Load existing conversation history from text mode (agent_id="default")
         # This enables voice mode to have context from previous text interactions
@@ -168,6 +155,42 @@ class VoiceChatbotAgent:
     # Text agent's agent_id for loading conversation history
     TEXT_AGENT_ID = "default"
 
+    def _get_default_model_id(self) -> Optional[str]:
+        """
+        Override base class method.
+        BidiAgent doesn't use model_id the same way as text agents.
+        """
+        return None
+
+    def _build_system_prompt(self) -> str:
+        """
+        Override base class method to build voice-specific system prompt.
+
+        Returns:
+            System prompt for voice mode
+        """
+        return build_voice_system_prompt(self.enabled_tools)
+
+    def _create_session_manager(self) -> Any:
+        """
+        Override base class method to use mode="voice".
+
+        Voice mode uses unified session managers without compaction:
+        - Cloud: CompactingSessionManager (metrics_only=True, no compaction)
+        - Local: UnifiedFileSessionManager (reads from all agent folders)
+
+        Returns:
+            Session manager configured for voice mode
+        """
+        from agent.factory.session_manager_factory import create_session_manager
+
+        return create_session_manager(
+            session_id=self.session_id,
+            user_id=self.user_id,
+            mode="voice",
+            compaction_enabled=False,
+        )
+
     def _load_text_history(self) -> List[Dict[str, Any]]:
         """
         Load conversation history from previous interactions.
@@ -176,9 +199,17 @@ class VoiceChatbotAgent:
         - Cloud: CompactingSessionManager (unified format under actor_id)
         - Local: UnifiedFileSessionManager (reads from all agent folders)
 
+        Nova Sonic has a strict message limit, so we only keep the most recent
+        messages for context continuity.
+
         Returns:
-            List of messages from this session, or empty list if none found
+            List of messages from this session (limited to recent messages), or empty list if none found
         """
+        # Nova Sonic message limit - adjust based on your needs
+        # Can be configured via NOVA_SONIC_MAX_MESSAGES environment variable
+        # Default: 20 messages (provides good context while staying within API limits)
+        MAX_MESSAGES = int(os.environ.get('NOVA_SONIC_MAX_MESSAGES', '20'))
+
         try:
             if hasattr(self.session_manager, 'list_messages'):
                 session_messages = self.session_manager.list_messages(
@@ -188,6 +219,14 @@ class VoiceChatbotAgent:
 
                 if session_messages:
                     messages = [msg.to_message() for msg in session_messages]
+                    original_count = len(messages)
+
+                    # Trim to most recent messages only
+                    if original_count > MAX_MESSAGES:
+                        messages = messages[-MAX_MESSAGES:]
+                        logger.info(f"[VoiceAgent] Trimmed messages from {original_count} to {len(messages)} "
+                                   f"(Nova Sonic limit protection)")
+
                     logger.info(f"[VoiceAgent] Loaded {len(messages)} messages from unified storage")
                     return messages
                 else:
@@ -200,73 +239,6 @@ class VoiceChatbotAgent:
         except Exception as e:
             logger.warning(f"[VoiceAgent] Failed to load history: {e}")
             return []
-
-    def _create_session_manager(self):
-        """
-        Create session manager for conversation persistence.
-
-        Both cloud and local modes use unified session managers that share
-        messages across all agents while keeping agent states separate:
-        - Cloud: CompactingSessionManager (unified format under actor_id)
-        - Local: UnifiedFileSessionManager (reads from all agent folders)
-
-        This enables seamless voice-text conversation continuity.
-        """
-        memory_id = os.environ.get('MEMORY_ID')
-        aws_region = os.environ.get('AWS_REGION', 'us-west-2')
-
-        if memory_id and AGENTCORE_MEMORY_AVAILABLE:
-            # Cloud deployment: Use CompactingSessionManager for unified format
-            logger.info(f"[VoiceAgent] Cloud mode: Using CompactingSessionManager (unified format)")
-
-            agentcore_memory_config = AgentCoreMemoryConfig(
-                memory_id=memory_id,
-                session_id=self.session_id,
-                actor_id=self.user_id,
-                enable_prompt_caching=False,  # Voice mode doesn't use prompt caching
-                retrieval_config=None  # No LTM retrieval for voice mode
-            )
-
-            return CompactingSessionManager(
-                agentcore_memory_config=agentcore_memory_config,
-                region_name=aws_region,
-                token_threshold=1_000_000,  # Very high threshold - effectively no compaction
-                protected_turns=100,  # Protect all turns
-                user_id=self.user_id,
-                metrics_only=True,  # Only track metrics, no actual compaction
-                enable_api_optimization=True,  # Use unified format for storage
-            )
-        else:
-            # Local development: Use unified file session manager
-            # UnifiedFileSessionManager overrides list_messages to read from ALL agent folders,
-            # enabling voice-text conversation continuity (matching cloud mode behavior)
-            logger.info(f"[VoiceAgent] Local mode: Using UnifiedFileSessionManager")
-            sessions_dir = Path(__file__).parent.parent.parent / "sessions"
-            sessions_dir.mkdir(exist_ok=True)
-
-            return UnifiedFileSessionManager(
-                session_id=self.session_id,
-                storage_dir=str(sessions_dir)
-            )
-
-    def _get_filtered_tools(self) -> List:
-        """
-        Get tools filtered by enabled_tools list.
-        Uses unified tool_filter module (shared with ChatbotAgent).
-        """
-        result = filter_tools(
-            enabled_tool_ids=self.enabled_tools,
-            log_prefix="[VoiceAgent]"
-        )
-
-        # Store Gateway client for lifecycle management
-        self.gateway_client = result.clients.get("gateway")
-
-        # Log any validation errors
-        for error in result.validation_errors:
-            logger.warning(f"[VoiceAgent] {error}")
-
-        return result.tools
 
     async def start(self) -> None:
         """Start the bidirectional agent connection
@@ -347,6 +319,37 @@ class VoiceChatbotAgent:
             "text": text,
             "role": "user",
         })
+
+    async def stream_async(
+        self,
+        message: str = "",
+        **kwargs
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream agent response (BaseAgent interface implementation).
+
+        Note: VoiceAgent uses bidirectional streaming via WebSocket,
+        not simple request-response like text agents. This method
+        provides compatibility with BaseAgent interface.
+
+        For actual voice streaming, use:
+        - start() to initialize connection
+        - send_audio() or send_text() to send input
+        - receive_events() to get audio/transcript events
+        - stop() to close connection
+
+        Args:
+            message: Text message (not used in voice mode)
+            **kwargs: Additional parameters (not used in voice mode)
+
+        Yields:
+            Empty (voice mode uses receive_events() instead)
+        """
+        logger.warning("[VoiceAgent] stream_async() called but not implemented for voice mode. "
+                      "Use start(), send_audio()/send_text(), receive_events(), stop() instead.")
+        # Yield nothing - voice mode doesn't use this method
+        return
+        yield  # Make this a generator
 
     async def receive_events(self) -> AsyncGenerator[Dict[str, Any], None]:
         """Receive and transform events from the agent for WebSocket transmission
@@ -529,7 +532,7 @@ class VoiceChatbotAgent:
 
             return event_dict
 
-    async def __aenter__(self) -> "VoiceChatbotAgent":
+    async def __aenter__(self) -> "VoiceAgent":
         """Async context manager entry"""
         await self.start()
         return self

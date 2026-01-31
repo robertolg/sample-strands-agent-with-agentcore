@@ -94,7 +94,8 @@ async function invokeLocalAgentCore(
   systemPrompt?: string,
   cachingEnabled?: boolean,
   abortSignal?: AbortSignal,
-  swarm?: boolean
+  requestType?: string,
+  selectedArtifactId?: string
 ): Promise<ReadableStream> {
   console.log('[AgentCore] 🚀 Invoking LOCAL AgentCore via HTTP POST')
   console.log(`[AgentCore]    URL: ${AGENTCORE_URL}/invocations`)
@@ -133,9 +134,14 @@ async function invokeLocalAgentCore(
     console.log(`[AgentCore]    Files (${files.length}):`, files.map((f: any) => f.filename))
   }
 
-  if (swarm !== undefined) {
-    inputData.swarm = swarm
-    console.log(`[AgentCore]    Swarm: ${swarm}`)
+  if (requestType) {
+    inputData.request_type = requestType
+    console.log(`[AgentCore]    Request type: ${requestType}`)
+  }
+
+  if (selectedArtifactId) {
+    inputData.selected_artifact_id = selectedArtifactId
+    console.log(`[AgentCore]    Selected artifact: ${selectedArtifactId}`)
   }
 
   const payload = { input: inputData }
@@ -192,7 +198,8 @@ async function invokeAwsAgentCore(
   systemPrompt?: string,
   cachingEnabled?: boolean,
   abortSignal?: AbortSignal,
-  swarm?: boolean
+  requestType?: string,
+  selectedArtifactId?: string
 ): Promise<ReadableStream> {
   await initializeAwsClients()
   const runtimeArn = await getAgentCoreRuntimeArn()
@@ -234,9 +241,14 @@ async function invokeAwsAgentCore(
     console.log(`[AgentCore]    Files (${files.length}):`, files.map((f: any) => f.filename))
   }
 
-  if (swarm !== undefined) {
-    inputData.swarm = swarm
-    console.log(`[AgentCore]    Swarm: ${swarm}`)
+  if (requestType) {
+    inputData.request_type = requestType
+    console.log(`[AgentCore]    Request type: ${requestType}`)
+  }
+
+  if (selectedArtifactId) {
+    inputData.selected_artifact_id = selectedArtifactId
+    console.log(`[AgentCore]    Selected artifact: ${selectedArtifactId}`)
   }
 
   const payload = { input: inputData }
@@ -380,13 +392,14 @@ export async function invokeAgentCoreRuntime(
   systemPrompt?: string,
   cachingEnabled?: boolean,
   abortSignal?: AbortSignal,
-  swarm?: boolean
+  requestType?: string,
+  selectedArtifactId?: string
 ): Promise<ReadableStream> {
   try {
     if (IS_LOCAL) {
-      return await invokeLocalAgentCore(userId, sessionId, message, modelId, enabledTools, files, temperature, systemPrompt, cachingEnabled, abortSignal, swarm)
+      return await invokeLocalAgentCore(userId, sessionId, message, modelId, enabledTools, files, temperature, systemPrompt, cachingEnabled, abortSignal, requestType, selectedArtifactId)
     } else {
-      return await invokeAwsAgentCore(userId, sessionId, message, modelId, enabledTools, files, temperature, systemPrompt, cachingEnabled, abortSignal, swarm)
+      return await invokeAwsAgentCore(userId, sessionId, message, modelId, enabledTools, files, temperature, systemPrompt, cachingEnabled, abortSignal, requestType, selectedArtifactId)
     }
   } catch (error) {
     console.error('[AgentCore] ❌ Failed to invoke Runtime:', error)

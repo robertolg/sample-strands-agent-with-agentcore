@@ -23,6 +23,7 @@ You can verify the sync with: GET http://localhost:3000/api/tools
 """
 
 from .diagram_tool import generate_diagram_and_validate
+from .artifact_editor_tool import update_artifact
 
 # Nova Act browser tools - conditionally imported due to strands version compatibility
 try:
@@ -61,6 +62,7 @@ from .powerpoint_presentation_tool import (
 
 __all__ = [
     'generate_diagram_and_validate',
+    'update_artifact',
     'browser_navigate',
     'browser_act',
     'browser_extract',
@@ -92,6 +94,7 @@ __all__ = [
 # Collection of all builtin tools for registry sync
 BUILTIN_TOOLS = [
     generate_diagram_and_validate,
+    update_artifact,
     create_word_document,
     modify_word_document,
     list_my_word_documents,

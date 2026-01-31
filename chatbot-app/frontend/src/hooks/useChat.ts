@@ -11,6 +11,7 @@ import { apiPost } from '@/lib/api-client'
 
 interface UseChatProps {
   onSessionCreated?: () => void
+  onArtifactUpdated?: () => void  // Callback when artifact is updated via update_artifact tool
 }
 
 interface UseChatReturn {
@@ -30,7 +31,7 @@ interface UseChatReturn {
   currentReasoning: ReasoningState | null
   showProgressPanel: boolean
   toggleProgressPanel: () => void
-  sendMessage: (e: React.FormEvent, files?: File[]) => Promise<void>
+  sendMessage: (e: React.FormEvent, files?: File[], additionalTools?: string[], systemPrompt?: string, selectedArtifactId?: string | null) => Promise<void>
   stopGeneration: () => void
   newChat: () => Promise<void>
   toggleTool: (toolId: string) => Promise<void>
@@ -58,6 +59,8 @@ interface UseChatReturn {
   updateVoiceMessage: (role: 'user' | 'assistant', text: string, isFinal: boolean) => void
   setVoiceStatus: (status: AgentStatus) => void
   finalizeVoiceMessage: () => void
+  // Artifact message
+  addArtifactMessage: (artifact: { id: string; type: string; title: string; wordCount?: number }) => void
 }
 
 // Default preferences when session has no saved preferences
@@ -176,7 +179,8 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     currentTurnIdRef,
     startPollingRef,
     sessionId,
-    availableTools
+    availableTools,
+    onArtifactUpdated: props?.onArtifactUpdated
   })
 
   // ==================== CHAT API HOOK ====================
@@ -517,7 +521,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     }
   }, [sessionState.interrupt, apiSendMessage])
 
-  const sendMessage = useCallback(async (e: React.FormEvent, files?: File[]) => {
+  const sendMessage = useCallback(async (e: React.FormEvent, files?: File[], additionalTools?: string[], systemPrompt?: string, selectedArtifactId?: string | null) => {
     e.preventDefault()
     if (!inputMessage.trim() && (!files || files.length === 0)) return
 
@@ -577,7 +581,10 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
         }))
       },
       undefined, // overrideEnabledTools
-      swarmEnabled // Pass swarm flag to backend
+      swarmEnabled ? "swarm" : undefined, // Pass request type to backend
+      additionalTools, // Pass additional tools (e.g., artifact editor)
+      systemPrompt, // Pass system prompt (e.g., artifact context)
+      selectedArtifactId // Pass selected artifact ID for tool context
     )
   }, [inputMessage, apiSendMessage, swarmEnabled])
 
@@ -699,6 +706,23 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
   // Set voice status (called by useVoiceChat via callback)
   const setVoiceStatus = useCallback((status: AgentStatus) => {
     setUIState(prev => ({ ...prev, agentStatus: status }))
+  }, [])
+
+  // Add artifact message (called when composer workflow creates an artifact)
+  const addArtifactMessage = useCallback((artifact: { id: string; type: string; title: string; wordCount?: number }) => {
+    const newMessage: Message = {
+      id: `artifact_${Date.now()}`,
+      text: '',  // No text, just the artifact reference
+      sender: 'bot',
+      timestamp: new Date().toISOString(),
+      artifactReference: {
+        id: artifact.id,
+        type: artifact.type,
+        title: artifact.title,
+        wordCount: artifact.wordCount
+      }
+    }
+    setMessages(prev => [...prev, newMessage])
   }, [])
 
   // Finalize current voice message (called when bidi_response_complete, tool_use, or interruption)
@@ -858,5 +882,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     updateVoiceMessage,
     setVoiceStatus,
     finalizeVoiceMessage,
+    // Artifact message
+    addArtifactMessage,
   }
 }

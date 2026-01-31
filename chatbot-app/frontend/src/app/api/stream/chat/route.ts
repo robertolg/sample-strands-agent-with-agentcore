@@ -25,7 +25,9 @@ export async function POST(request: NextRequest) {
     let model_id: string | undefined
     let enabled_tools: string[] | undefined
     let files: File[] | undefined
-    let swarm: boolean | undefined
+    let request_type: string | undefined
+    let selected_artifact_id: string | undefined
+    let system_prompt: string | undefined
 
     if (isFormData) {
       // Parse FormData for file uploads
@@ -68,7 +70,9 @@ export async function POST(request: NextRequest) {
       message = body.message
       model_id = body.model_id
       enabled_tools = body.enabled_tools
-      swarm = body.swarm
+      request_type = body.request_type
+      selected_artifact_id = body.selected_artifact_id
+      system_prompt = body.system_prompt
     }
 
     if (!message) {
@@ -293,6 +297,12 @@ export async function POST(request: NextRequest) {
             })
           }
 
+          // Merge system prompts: user-provided (artifact context) + model config
+          let finalSystemPrompt = modelConfig.system_prompt
+          if (system_prompt) {
+            finalSystemPrompt = `${modelConfig.system_prompt}\n\n${system_prompt}`
+          }
+
           const agentStream = await invokeAgentCoreRuntime(
             userId,
             sessionId,
@@ -301,10 +311,11 @@ export async function POST(request: NextRequest) {
             enabledToolsList.length > 0 ? enabledToolsList : undefined,
             files, // Pass uploaded files to AgentCore
             modelConfig.temperature,
-            modelConfig.system_prompt,
+            finalSystemPrompt,
             modelConfig.caching_enabled,
             agentCoreAbortController.signal, // Pass abort signal for cancellation
-            swarm // Pass swarm flag for multi-agent orchestration
+            request_type, // Request type: normal, swarm, compose
+            selected_artifact_id // Selected artifact ID for tool context
           )
           agentStarted = true
 

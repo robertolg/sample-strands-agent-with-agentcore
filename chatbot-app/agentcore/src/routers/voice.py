@@ -21,18 +21,18 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 logger = logging.getLogger(__name__)
 
 # Lazy import to avoid pyaudio dependency at module load time
-VoiceChatbotAgent = None
+VoiceAgent = None
 
 def _get_voice_agent_class():
-    global VoiceChatbotAgent
-    if VoiceChatbotAgent is None:
-        from agent.voice_agent import VoiceChatbotAgent as _VoiceChatbotAgent
-        VoiceChatbotAgent = _VoiceChatbotAgent
-    return VoiceChatbotAgent
+    global VoiceAgent
+    if VoiceAgent is None:
+        from agent.voice_agent import VoiceAgent as _VoiceAgent
+        VoiceAgent = _VoiceAgent
+    return VoiceAgent
 
 router = APIRouter()
 
-# Active voice sessions (session_id -> VoiceChatbotAgent)
+# Active voice sessions (session_id -> VoiceAgent)
 _active_sessions: dict = {}
 
 
@@ -179,7 +179,7 @@ async def voice_stream(
 
 async def _receive_from_client(
     websocket: WebSocket,
-    voice_agent: VoiceChatbotAgent,
+    voice_agent,  # VoiceAgent (lazy imported, no type hint to avoid import at module level)
     session_id: str,
 ) -> None:
     """Receive messages from WebSocket client and forward to agent"""

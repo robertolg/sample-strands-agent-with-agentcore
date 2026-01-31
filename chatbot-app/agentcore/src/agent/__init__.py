@@ -10,7 +10,7 @@ Submodules:
 
 Usage:
     from agent.agent import ChatbotAgent, get_global_stream_processor
-    from agent.voice_agent import VoiceChatbotAgent
+    from agent.voice_agent import VoiceAgent
     from agent.swarm_agents import create_chatbot_swarm
     from agent.stop_signal import get_stop_signal_provider
 

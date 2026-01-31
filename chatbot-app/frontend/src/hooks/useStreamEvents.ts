@@ -24,6 +24,7 @@ interface UseStreamEventsProps {
     name: string
     tool_type?: string
   }>
+  onArtifactUpdated?: () => void  // Callback when artifact is updated via update_artifact tool
 }
 
 export const useStreamEvents = ({
@@ -36,7 +37,8 @@ export const useStreamEvents = ({
   currentTurnIdRef,
   startPollingRef,
   sessionId,
-  availableTools = []
+  availableTools = [],
+  onArtifactUpdated
 }: UseStreamEventsProps) => {
   // Refs to track streaming state synchronously (avoid React batching issues)
   const streamingStartedRef = useRef(false)
@@ -397,6 +399,12 @@ export const useStreamEvents = ({
           }
           return prev
         })
+      }
+
+      // If update_artifact tool completed successfully, notify parent to refresh artifacts
+      if (toolName === 'update_artifact' && !isCancelled && onArtifactUpdated) {
+        console.log('[useStreamEvents] update_artifact completed, triggering artifact refresh')
+        onArtifactUpdated()
       }
 
       // Update tool execution with result

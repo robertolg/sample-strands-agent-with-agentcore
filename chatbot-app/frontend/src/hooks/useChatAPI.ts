@@ -180,7 +180,7 @@ interface UseChatAPIReturn {
   loadTools: () => Promise<void>
   toggleTool: (toolId: string) => Promise<void>
   newChat: () => Promise<boolean>
-  sendMessage: (messageToSend: string, files?: File[], onSuccess?: () => void, onError?: (error: string) => void, overrideEnabledTools?: string[], swarm?: boolean) => Promise<void>
+  sendMessage: (messageToSend: string, files?: File[], onSuccess?: () => void, onError?: (error: string) => void, overrideEnabledTools?: string[], requestType?: string) => Promise<void>
   cleanup: () => void
   isLoadingTools: boolean
   loadSession: (sessionId: string) => Promise<SessionPreferences | null>
@@ -450,7 +450,10 @@ export const useChatAPI = ({
     onSuccess?: () => void,
     onError?: (error: string) => void,
     overrideEnabledTools?: string[], // Override enabled tools (for Research Agent interrupt)
-    swarm?: boolean // Enable swarm mode (Multi-Agent orchestration)
+    requestType?: string, // Request type: "normal", "swarm", "compose"
+    additionalTools?: string[], // Additional tools to add (e.g., artifact editor when artifact is selected)
+    systemPrompt?: string, // Additional system prompt context (e.g., artifact context)
+    selectedArtifactId?: string | null // Selected artifact ID for tool context
   ) => {
     // Update last activity timestamp (for session timeout tracking)
     updateLastActivity()
@@ -508,6 +511,16 @@ export const useChatAPI = ({
         logger.info(`🔒 Tool gating: Research Agent active - all other tools disabled`)
       }
 
+      // Add additional tools (e.g., artifact editor when artifact is selected)
+      if (additionalTools && additionalTools.length > 0) {
+        additionalTools.forEach(toolId => {
+          if (!allEnabledToolIds.includes(toolId)) {
+            allEnabledToolIds.push(toolId)
+          }
+        })
+        logger.info(`➕ Added ${additionalTools.length} additional tools: ${additionalTools.join(', ')}`)
+      }
+
       logger.info(`Sending message with ${allEnabledToolIds.length} enabled tools (${enabledToolIds.length} local + ${gatewayToolIds.length} gateway)${files && files.length > 0 ? ` and ${files.length} files` : ''}`)
 
       if (files && files.length > 0) {
@@ -515,6 +528,11 @@ export const useChatAPI = ({
         const formData = new FormData()
         formData.append('message', messageToSend)
         formData.append('enabled_tools', JSON.stringify(allEnabledToolIds))
+
+        // Add system prompt if provided
+        if (systemPrompt) {
+          formData.append('system_prompt', systemPrompt)
+        }
 
         // Add all files to form data
         files.forEach((file) => {
@@ -546,7 +564,9 @@ export const useChatAPI = ({
           body: JSON.stringify({
             message: messageToSend,
             enabled_tools: allEnabledToolIds,
-            ...(swarm !== undefined && { swarm })
+            ...(requestType && { request_type: requestType }),
+            ...(systemPrompt && { system_prompt: systemPrompt }),
+            ...(selectedArtifactId && { selected_artifact_id: selectedArtifactId })
           }),
           signal: abortControllerRef.current.signal
         })
@@ -771,6 +791,14 @@ export const useChatAPI = ({
       const sessionPreferences: SessionPreferences | null = data.sessionPreferences || null
       if (sessionPreferences) {
         logger.info(`Session preferences loaded: model=${sessionPreferences.lastModel}, tools=${sessionPreferences.enabledTools?.length || 0}`)
+      }
+
+      // Extract artifacts (if present)
+      const artifacts = data.artifacts || []
+      if (artifacts.length > 0) {
+        logger.info(`[loadSession] Loaded ${artifacts.length} artifacts from history API`)
+        // Store artifacts in sessionStorage for useArtifacts to pick up
+        sessionStorage.setItem(`artifacts-${newSessionId}`, JSON.stringify(artifacts))
       }
 
       // Build tool maps for toolUse/toolResult matching

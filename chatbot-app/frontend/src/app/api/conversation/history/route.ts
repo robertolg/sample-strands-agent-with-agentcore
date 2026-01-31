@@ -99,12 +99,16 @@ export async function GET(request: NextRequest) {
     // Get Memory ID (from env or Parameter Store)
     const memoryId = await getMemoryId()
 
+    let artifacts: any[] = []
+
     if (userId === 'anonymous' || IS_LOCAL || !memoryId) {
       // Local mode or anonymous user - load from local file storage
       console.log(`[API] Using local file storage (IS_LOCAL=${IS_LOCAL}, memoryId=${memoryId ? 'present' : 'missing'})`)
-      const { getSessionMessages } = await import('@/lib/local-session-store')
+      const { getSessionMessages, getSessionArtifacts } = await import('@/lib/local-session-store')
       messages = getSessionMessages(sessionId)
+      artifacts = getSessionArtifacts(sessionId)
       console.log(`[API] Loaded ${messages.length} messages from local file`)
+      console.log(`[API] Loaded ${artifacts.length} artifacts from local file`)
     } else {
       // AWS mode - load from AgentCore Memory
       console.log(`[API] Using AgentCore Memory: ${memoryId}`)
@@ -143,6 +147,37 @@ export async function GET(request: NextRequest) {
       messages = []
       let msgIndex = 0
 
+      // Also look for agent_state (artifacts are stored in agent.state.artifacts)
+      // Events are newest-first, so we find the latest agent_state first
+      let latestAgentState: any = null
+
+      for (const event of events) {
+        for (const payloadItem of event.payload || []) {
+          if (payloadItem.blob && typeof payloadItem.blob === 'string') {
+            try {
+              const blobData = JSON.parse(payloadItem.blob)
+              if (
+                typeof blobData === 'object' &&
+                blobData._payload_type === 'agent_state' &&
+                blobData._agent_id === 'default'  // ChatAgent uses 'default' agent_id
+              ) {
+                latestAgentState = blobData
+                break  // Found latest, stop searching
+              }
+            } catch {
+              // Not JSON or invalid format, skip
+            }
+          }
+        }
+        if (latestAgentState) break  // Found latest agent_state
+      }
+
+      // Extract artifacts from agent_state
+      if (latestAgentState?.state?.artifacts) {
+        artifacts = Object.values(latestAgentState.state.artifacts)
+        console.log(`[API] Loaded ${artifacts.length} artifacts from AgentCore Memory agent_state`)
+      }
+
       for (let i = 0; i < reversedEvents.length; i++) {
         const event = reversedEvents[i]
         const payload = event.payload?.[0]
@@ -167,6 +202,11 @@ export async function GET(request: NextRequest) {
             continue
           }
 
+          // Skip agent_state payloads (already processed above)
+          if (parsed._payload_type === 'agent_state') {
+            continue
+          }
+
           if (!parsed.message) {
             console.warn(`[API] Event ${event.eventId} missing "message" key, skipping`)
             continue
@@ -184,6 +224,11 @@ export async function GET(request: NextRequest) {
         else if (payload.blob && typeof payload.blob === 'string') {
           try {
             const blobParsed = JSON.parse(payload.blob)
+
+            // Skip agent_state blobs (already processed above)
+            if (typeof blobParsed === 'object' && blobParsed._payload_type === 'agent_state') {
+              continue
+            }
 
             // Blob format from SDK: ["message_json", "role"] tuple
             if (Array.isArray(blobParsed) && blobParsed.length >= 1) {
@@ -245,11 +290,13 @@ export async function GET(request: NextRequest) {
 
     // Return messages with merged toolResults from blobs and metadata
     // Also include session preferences (model, tools) for restoration
+    // And include artifacts
     return NextResponse.json({
       success: true,
       sessionId,
       messages: messages,
       count: messages.length,
+      artifacts: artifacts, // Include artifacts in response
       // Include session preferences for restoration
       sessionPreferences: sessionMetadata ? {
         lastModel: sessionMetadata.lastModel,
