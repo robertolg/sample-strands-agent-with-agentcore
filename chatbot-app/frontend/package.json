@@ -67,7 +67,7 @@
   },
   "overrides": {
     "mdast-util-to-hast": "^13.2.1",
-    "jspdf": "^4.0.0",
+    "jspdf": "^4.1.0",
     "@smithy/config-resolver": "^4.4.0",
     "lodash": "^4.17.23",
     "fast-xml-parser": "^5.3.4"

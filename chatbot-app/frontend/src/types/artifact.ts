@@ -19,7 +19,7 @@ export interface Artifact {
   description?: string
   toolName?: string
   timestamp: string
-  sessionId: string
+  sessionId?: string
 }
 
 export interface CanvasState {

@@ -136,10 +136,21 @@ class VoiceAgent(BaseAgent):
         # Create BidiAgent with session manager for conversation persistence
         # Use separate agent_id ("voice") from text mode to avoid state conflicts
         # Pass initial_messages from text mode for conversation continuity
+        #
+        # Note: BaseAgent normalizes system_prompt to list format [{"text": "..."}]
+        # for Claude models, but BidiAgent/Nova Sonic expects a plain string.
+        # Convert back to string if needed.
+        voice_system_prompt = self.system_prompt
+        if isinstance(voice_system_prompt, list):
+            # Extract text from content blocks and join
+            voice_system_prompt = "\n\n".join(
+                block.get("text", "") for block in voice_system_prompt if isinstance(block, dict)
+            )
+
         self.agent = BidiAgent(
             model=self.model,
             tools=self.tools,
-            system_prompt=self.system_prompt,
+            system_prompt=voice_system_prompt,
             agent_id=self.VOICE_AGENT_ID,  # "voice" - separate from text ChatbotAgent
             name="Voice Assistant",
             description="Real-time voice assistant powered by Nova Sonic",

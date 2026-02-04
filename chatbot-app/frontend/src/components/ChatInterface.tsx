@@ -494,6 +494,21 @@ export function ChatInterface() {
     }
   }, [availableTools])
 
+  // Reset research state when a new research starts
+  // This allows the second research in the same session to show the HITL modal
+  const prevAgentStatusRef = useRef<string | null>(null)
+  useEffect(() => {
+    // When transitioning to 'researching' from another status, reset the research artifact
+    if (agentStatus === 'researching' && prevAgentStatusRef.current !== 'researching') {
+      if (researchArtifactId && researchArtifactId !== 'in-progress') {
+        // Previous research was completed, reset for new research
+        setResearchArtifactId(null)
+        researchRef.current.reset()
+      }
+    }
+    prevAgentStatusRef.current = agentStatus
+  }, [agentStatus, researchArtifactId])
+
   // Connect research_progress events to useResearch hook
   useEffect(() => {
     if (researchProgress && researchArtifactId) {
@@ -625,45 +640,56 @@ export function ChatInterface() {
         // Artifact ID is research-{toolUseId} where toolUseId = executionId
         const targetArtifactId = `research-${executionId}`
 
-        // Backend saves artifact to agent.state - refresh to load it
-        // Short delay to ensure backend has finished saving
-        setTimeout(async () => {
-          if (sessionId) {
-            const refreshedArtifacts = await refreshArtifacts({ skipFlashEffect: true })
-            // Find artifact by ID (mapped via toolUseId/executionId)
-            const researchArtifact = refreshedArtifacts.find(
-              a => a.id === targetArtifactId
-            )
-            // Use startTransition for lower-priority state updates
-            // This prevents interrupting the main chat UI rendering
-            startTransition(() => {
-              if (researchArtifact) {
-                setSelectedArtifactId(researchArtifact.id)
-              }
-              setResearchArtifactId(null)
-              researchRef.current.reset()
-            })
-          } else {
-            // No sessionId - just clean up
-            startTransition(() => {
-              setResearchArtifactId(null)
-              researchRef.current.reset()
-            })
+        // Add artifact directly to state (backend also saves it)
+        // No need to call refreshArtifacts which triggers unnecessary API calls
+        addArtifact({
+          id: targetArtifactId,
+          type: 'research',
+          title: title,
+          content: content,
+          description: '',
+          timestamp: new Date().toISOString(),
+          sessionId: sessionId || undefined,
+        })
+
+        // Update sessionStorage for persistence
+        if (sessionId) {
+          const artifactsKey = `artifacts-${sessionId}`
+          const stored = sessionStorage.getItem(artifactsKey)
+          const existingArtifacts = stored ? JSON.parse(stored) : []
+          const newArtifact = {
+            id: targetArtifactId,
+            type: 'research',
+            title: title,
+            content: content,
+            metadata: { description: '' },
+            created_at: new Date().toISOString(),
           }
-        }, 500)
+          // Check if artifact already exists
+          const existingIndex = existingArtifacts.findIndex((a: any) => a.id === targetArtifactId)
+          if (existingIndex >= 0) {
+            existingArtifacts[existingIndex] = newArtifact
+          } else {
+            existingArtifacts.push(newArtifact)
+          }
+          sessionStorage.setItem(artifactsKey, JSON.stringify(existingArtifacts))
+        }
+
+        // Select the artifact and clean up research state (synchronous updates)
+        setSelectedArtifactId(targetArtifactId)
+        setResearchArtifactId(null)
+        researchRef.current.reset()
       } else if (data.status === 'error' || data.status === 'declined') {
         processedResearchIdsRef.current.add(executionId)
         // Just clean up research state
         if (researchArtifactId) {
-          startTransition(() => {
-            setResearchArtifactId(null)
-            researchRef.current.reset()
-          })
+          setResearchArtifactId(null)
+          researchRef.current.reset()
           closeCanvas()
         }
       }
     }
-  }, [researchData, researchArtifactId, closeCanvas, openArtifact, refreshArtifacts, sessionId, extractResearchContent])
+  }, [researchData, researchArtifactId, closeCanvas, addArtifact, sessionId, extractResearchContent, setSelectedArtifactId])
 
   // Toggle Research Agent
   const toggleResearchAgent = useCallback(async () => {
