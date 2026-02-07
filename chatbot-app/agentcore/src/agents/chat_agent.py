@@ -15,7 +15,7 @@ from strands.models import BedrockModel, CacheConfig
 from strands.tools.executors import SequentialToolExecutor
 from agents.base import BaseAgent
 from streaming.event_processor import StreamEventProcessor
-from agent.hooks import ResearchApprovalHook
+from agent.hooks import ResearchApprovalHook, EmailApprovalHook
 from agent.config.prompt_builder import (
     build_text_system_prompt,
     system_prompt_to_string,
@@ -87,7 +87,8 @@ class ChatAgent(BaseAgent):
         compaction_enabled: Optional[bool] = None,
         use_null_conversation_manager: Optional[bool] = None,
         agent_id: Optional[str] = None,
-        api_keys: Optional[Dict[str, str]] = None
+        api_keys: Optional[Dict[str, str]] = None,
+        auth_token: Optional[str] = None,
     ):
         """
         Initialize ChatAgent with specific configuration
@@ -113,6 +114,7 @@ class ChatAgent(BaseAgent):
         self.agent = None
         self.use_null_conversation_manager = use_null_conversation_manager if use_null_conversation_manager is not None else False
         self.api_keys = api_keys  # User-specific API keys
+        self.auth_token = auth_token  # Cognito JWT for MCP Runtime 3LO
 
         # Call BaseAgent init (handles tools, session_manager)
         super().__init__(
@@ -124,6 +126,7 @@ class ChatAgent(BaseAgent):
             system_prompt=system_prompt,
             caching_enabled=caching_enabled,
             compaction_enabled=compaction_enabled,
+            auth_token=auth_token,
         )
 
         # Create Strands agent after base initialization
@@ -214,6 +217,11 @@ class ChatAgent(BaseAgent):
             hooks.append(research_approval_hook)
             logger.debug("Research approval hook enabled (BeforeToolCallEvent)")
 
+            # Add email approval hook for bulk email operations
+            email_approval_hook = EmailApprovalHook(app_name="chatbot")
+            hooks.append(email_approval_hook)
+            logger.debug("Email approval hook enabled (BeforeToolCallEvent)")
+
             # Create agent with session manager, hooks, and system prompt as list of content blocks
             agent_kwargs = {
                 "model": model,
@@ -298,6 +306,13 @@ class ChatAgent(BaseAgent):
         os.environ['USER_ID'] = self.user_id or self.session_id
 
         try:
+            # Surface tool validation warnings (e.g., MCP tools require auth)
+            if self.tool_validation_errors:
+                import json as _json
+                for err in self.tool_validation_errors:
+                    warning_event = {"type": "warning", "message": err}
+                    yield f"data: {_json.dumps(warning_event)}\n\n"
+
             # Reset context token tracking for new turn
             if hasattr(self.session_manager, 'reset_context_token_tracking'):
                 self.session_manager.reset_context_token_tracking()

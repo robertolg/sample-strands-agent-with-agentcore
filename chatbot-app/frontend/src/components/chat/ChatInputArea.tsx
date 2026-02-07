@@ -32,6 +32,8 @@ interface ChatInputAreaProps {
     isComposing: boolean
     showOutlineConfirm: boolean
   }
+  currentModelId?: string
+  onModelChange?: (modelId: string) => void
   onSendMessage: (e: React.FormEvent, files: File[]) => Promise<void>
   onStopGeneration: () => void
   onToggleTool: (toolId: string) => Promise<void>
@@ -66,6 +68,8 @@ export function ChatInputArea({
   availableTools,
   sessionId,
   composerState,
+  currentModelId,
+  onModelChange,
   onSendMessage,
   onStopGeneration,
   onToggleTool,
@@ -435,7 +439,7 @@ export function ChatInputArea({
             </TooltipProvider>
 
             <div className="flex items-center">
-              <ModelConfigDialog sessionId={sessionId} agentStatus={agentStatus} />
+              <ModelConfigDialog sessionId={sessionId} agentStatus={agentStatus} currentModelId={currentModelId} onModelChange={onModelChange} />
             </div>
           </div>
         </div>

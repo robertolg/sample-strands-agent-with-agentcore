@@ -46,6 +46,8 @@ function checkIfRegistryNeedsSync(fallback: any, registry: any): boolean {
       countNestedTools(fallback.gateway_targets) !== countNestedTools(registry.gateway_targets),
       // AgentCore Runtime A2A
       (fallback.agentcore_runtime_a2a?.length || 0) !== (registry.agentcore_runtime_a2a?.length || 0),
+      // AgentCore Runtime MCP
+      countNestedTools(fallback.agentcore_runtime_mcp) !== countNestedTools(registry.agentcore_runtime_mcp),
     ]
 
     const needsSync = checks.some(check => check === true)
@@ -57,6 +59,7 @@ function checkIfRegistryNeedsSync(fallback: any, registry: any): boolean {
       console.log(`  browser_automation (nested): ${countNestedTools(fallback.browser_automation)} vs ${countNestedTools(registry.browser_automation)}`)
       console.log(`  gateway_targets (nested): ${countNestedTools(fallback.gateway_targets)} vs ${countNestedTools(registry.gateway_targets)}`)
       console.log(`  agentcore_runtime_a2a: ${fallback.agentcore_runtime_a2a?.length || 0} vs ${registry.agentcore_runtime_a2a?.length || 0}`)
+      console.log(`  agentcore_runtime_mcp (nested): ${countNestedTools(fallback.agentcore_runtime_mcp)} vs ${countNestedTools(registry.agentcore_runtime_mcp)}`)
     }
 
     return needsSync
@@ -275,10 +278,39 @@ export async function GET(request: NextRequest) {
       }
     })
 
+    // Runtime MCP tools (grouped like gateway targets)
+    const runtimeMCPServers = (toolsConfig as any).agentcore_runtime_mcp || []
+    const runtimeMCPTools = runtimeMCPServers.map((group: any) => {
+      const anyToolEnabled = group.tools && Array.isArray(group.tools)
+        ? group.tools.some((tool: any) => enabledToolIds.includes(tool.id))
+        : enabledToolIds.includes(group.id)
+
+      return {
+        id: group.id,
+        name: group.name,
+        description: group.description,
+        category: group.category,
+        icon: group.icon,
+        type: 'runtime-mcp',
+        tool_type: 'runtime-mcp',
+        enabled: anyToolEnabled,
+        isDynamic: group.isDynamic ?? true,
+        runtime_arn: group.runtime_arn,
+        tools: group.tools && Array.isArray(group.tools)
+          ? group.tools.map((tool: any) => ({
+              id: tool.id,
+              name: tool.name,
+              description: tool.description,
+              enabled: enabledToolIds.includes(tool.id)
+            }))
+          : undefined
+      }
+    })
+
     console.log(`[API] Returning tools for user ${userId} - ${enabledToolIds.length} enabled`)
 
     return NextResponse.json({
-      tools: [...localTools, ...builtinTools, ...browserAutomation, ...gatewayTools, ...runtimeA2ATools]
+      tools: [...localTools, ...builtinTools, ...browserAutomation, ...gatewayTools, ...runtimeA2ATools, ...runtimeMCPTools]
     })
   } catch (error) {
     console.error('[API] Error loading tools:', error)
@@ -372,8 +404,23 @@ export async function GET(request: NextRequest) {
       runtime_arn: server.runtime_arn
     }))
 
+    // Runtime MCP tools (fallback - grouped)
+    const runtimeMCPServers = (toolsConfigFallback as any).agentcore_runtime_mcp || []
+    const runtimeMCPTools = runtimeMCPServers.map((group: any) => ({
+      id: group.id,
+      name: group.name,
+      description: group.description,
+      category: group.category,
+      icon: group.icon,
+      type: 'runtime-mcp',
+      tool_type: 'runtime-mcp',
+      enabled: group.enabled ?? false,
+      isDynamic: group.isDynamic ?? true,
+      tools: group.tools || undefined
+    }))
+
     return NextResponse.json({
-      tools: [...localTools, ...builtinTools, ...browserAutomation, ...gatewayTools, ...runtimeA2ATools]
+      tools: [...localTools, ...builtinTools, ...browserAutomation, ...gatewayTools, ...runtimeA2ATools, ...runtimeMCPTools]
     })
   }
 }

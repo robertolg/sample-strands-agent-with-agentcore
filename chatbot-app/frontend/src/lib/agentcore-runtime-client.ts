@@ -96,7 +96,8 @@ async function invokeLocalAgentCore(
   abortSignal?: AbortSignal,
   requestType?: string,
   selectedArtifactId?: string,
-  apiKeys?: Record<string, string>
+  apiKeys?: Record<string, string>,
+  authToken?: string
 ): Promise<ReadableStream> {
   console.log('[AgentCore] 🚀 Invoking LOCAL AgentCore via HTTP POST')
   console.log(`[AgentCore]    URL: ${AGENTCORE_URL}/invocations`)
@@ -150,9 +151,13 @@ async function invokeLocalAgentCore(
     console.log(`[AgentCore]    API keys provided: ${Object.keys(apiKeys).join(', ')}`)
   }
 
+  if (authToken) {
+    inputData.auth_token = authToken
+  }
+
   const payload = { input: inputData }
 
-  // Log payload without bytes and api_keys (to avoid massive console output and security concerns)
+  // Log payload without bytes, api_keys, auth_token (security)
   const payloadForLog = {
     input: {
       ...inputData,
@@ -161,7 +166,8 @@ async function invokeLocalAgentCore(
         content_type: f.content_type,
         bytes: `<base64 data ${f.bytes?.length || 0} chars>`
       })),
-      api_keys: apiKeys ? `<${Object.keys(apiKeys).length} keys>` : undefined
+      api_keys: apiKeys ? `<${Object.keys(apiKeys).length} keys>` : undefined,
+      auth_token: authToken ? '<present>' : undefined
     }
   }
   console.log('[AgentCore]    Payload:', JSON.stringify(payloadForLog, null, 2))
@@ -207,7 +213,8 @@ async function invokeAwsAgentCore(
   abortSignal?: AbortSignal,
   requestType?: string,
   selectedArtifactId?: string,
-  apiKeys?: Record<string, string>
+  apiKeys?: Record<string, string>,
+  authToken?: string
 ): Promise<ReadableStream> {
   await initializeAwsClients()
   const runtimeArn = await getAgentCoreRuntimeArn()
@@ -264,9 +271,13 @@ async function invokeAwsAgentCore(
     console.log(`[AgentCore]    API keys provided: ${Object.keys(apiKeys).join(', ')}`)
   }
 
+  if (authToken) {
+    inputData.auth_token = authToken
+  }
+
   const payload = { input: inputData }
 
-  // Log payload without bytes and api_keys (to avoid massive console output and security concerns)
+  // Log payload without bytes, api_keys, auth_token (security)
   const payloadForLog = {
     input: {
       ...inputData,
@@ -275,7 +286,8 @@ async function invokeAwsAgentCore(
         content_type: f.content_type,
         bytes: `<base64 data ${f.bytes?.length || 0} chars>`
       })),
-      api_keys: apiKeys ? `<${Object.keys(apiKeys).length} keys>` : undefined
+      api_keys: apiKeys ? `<${Object.keys(apiKeys).length} keys>` : undefined,
+      auth_token: authToken ? '<present>' : undefined
     }
   }
   console.log('[AgentCore]    Payload:', JSON.stringify(payloadForLog, null, 2))
@@ -408,13 +420,14 @@ export async function invokeAgentCoreRuntime(
   abortSignal?: AbortSignal,
   requestType?: string,
   selectedArtifactId?: string,
-  apiKeys?: Record<string, string>
+  apiKeys?: Record<string, string>,
+  authToken?: string
 ): Promise<ReadableStream> {
   try {
     if (IS_LOCAL) {
-      return await invokeLocalAgentCore(userId, sessionId, message, modelId, enabledTools, files, temperature, systemPrompt, cachingEnabled, abortSignal, requestType, selectedArtifactId, apiKeys)
+      return await invokeLocalAgentCore(userId, sessionId, message, modelId, enabledTools, files, temperature, systemPrompt, cachingEnabled, abortSignal, requestType, selectedArtifactId, apiKeys, authToken)
     } else {
-      return await invokeAwsAgentCore(userId, sessionId, message, modelId, enabledTools, files, temperature, systemPrompt, cachingEnabled, abortSignal, requestType, selectedArtifactId, apiKeys)
+      return await invokeAwsAgentCore(userId, sessionId, message, modelId, enabledTools, files, temperature, systemPrompt, cachingEnabled, abortSignal, requestType, selectedArtifactId, apiKeys, authToken)
     }
   } catch (error) {
     console.error('[AgentCore] ❌ Failed to invoke Runtime:', error)

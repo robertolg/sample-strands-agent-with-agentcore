@@ -560,6 +560,22 @@ async function sendResponse(event, status, data, reason) {
       })
     );
 
+    // Add AgentCore Identity permissions for 3LO OAuth flow completion
+    // Required when user completes OAuth consent and we need to store the token
+    frontendTaskDefinition.addToTaskRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'AgentCoreIdentityAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:CompleteResourceTokenAuth'
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:token-vault/*`,
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:workload-identity-directory/*`
+        ]
+      })
+    );
+
     // Add Parameter Store permissions to fetch AgentCore Runtime ARN, MCP Gateway URL
     frontendTaskDefinition.addToTaskRolePolicy(
       new iam.PolicyStatement({

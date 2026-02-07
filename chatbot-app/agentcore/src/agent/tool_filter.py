@@ -61,17 +61,20 @@ class ToolFilterRegistry:
     - Local tools: plain ID (e.g., "calculator", "fetch_url_content")
     - Gateway tools: "gateway_" prefix (e.g., "gateway_wikipedia_search")
     - A2A agents: "agentcore_" prefix (e.g., "agentcore_research-agent")
+    - MCP Runtime tools: "mcp_" prefix (e.g., "mcp_search_emails")
     """
 
     # Prefixes for different tool sources
     GATEWAY_PREFIX = "gateway_"
     A2A_PREFIX = "agentcore_"
+    MCP_PREFIX = "mcp_"
 
     def __init__(
         self,
         local_registry: Optional[Dict[str, Any]] = None,
         gateway_client_factory: Optional[Callable] = None,
         a2a_tool_factory: Optional[Callable] = None,
+        mcp_runtime_client_factory: Optional[Callable] = None,
     ):
         """
         Initialize the tool filter registry.
@@ -80,10 +83,12 @@ class ToolFilterRegistry:
             local_registry: Dict mapping tool_id -> tool object (default: imports TOOL_REGISTRY)
             gateway_client_factory: Function to create Gateway MCP client
             a2a_tool_factory: Function to create A2A tools
+            mcp_runtime_client_factory: Function to create MCP Runtime client
         """
         self._local_registry = local_registry
         self._gateway_client_factory = gateway_client_factory
         self._a2a_tool_factory = a2a_tool_factory
+        self._mcp_runtime_client_factory = mcp_runtime_client_factory
 
     def _get_local_registry(self) -> Dict[str, Any]:
         """Lazy load local registry to avoid circular imports."""
@@ -114,6 +119,17 @@ class ToolFilterRegistry:
                 return None
         return self._a2a_tool_factory
 
+    def _get_mcp_runtime_client_factory(self) -> Optional[Callable]:
+        """Lazy load MCP Runtime client factory."""
+        if self._mcp_runtime_client_factory is None:
+            try:
+                from agent.mcp.mcp_runtime_client import get_mcp_runtime_client_if_enabled
+                self._mcp_runtime_client_factory = get_mcp_runtime_client_if_enabled
+            except ImportError:
+                logger.warning("MCP Runtime client not available")
+                return None
+        return self._mcp_runtime_client_factory
+
     def classify_tool_id(self, tool_id: str) -> str:
         """
         Classify a tool ID by its source.
@@ -122,12 +138,14 @@ class ToolFilterRegistry:
             tool_id: The tool identifier
 
         Returns:
-            Source type: "local", "gateway", "a2a", or "unknown"
+            Source type: "local", "gateway", "a2a", "mcp", or "unknown"
         """
         if tool_id.startswith(self.GATEWAY_PREFIX):
             return "gateway"
         elif tool_id.startswith(self.A2A_PREFIX):
             return "a2a"
+        elif tool_id.startswith(self.MCP_PREFIX):
+            return "mcp"
         elif tool_id in self._get_local_registry():
             return "local"
         else:
@@ -190,6 +208,7 @@ class ToolFilterRegistry:
         enabled_tool_ids: Optional[List[str]],
         filters: Optional[ToolFilters] = None,
         log_prefix: str = "",
+        auth_token: Optional[str] = None,
     ) -> FilteredToolResult:
         """
         Filter and load tools from all sources.
@@ -207,6 +226,7 @@ class ToolFilterRegistry:
             "local": [],
             "gateway": [],
             "a2a": [],
+            "mcp": [],
         }
 
         # No tools if enabled_tool_ids is None or empty
@@ -217,6 +237,7 @@ class ToolFilterRegistry:
         # Classify and collect tool IDs by source
         gateway_tool_ids = []
         a2a_agent_ids = []
+        mcp_tool_ids = []
 
         for tool_id in enabled_tool_ids:
             # Apply additional filters if provided
@@ -243,6 +264,9 @@ class ToolFilterRegistry:
             elif source == "a2a":
                 a2a_agent_ids.append(tool_id)
 
+            elif source == "mcp":
+                mcp_tool_ids.append(tool_id)
+
             else:
                 result.validation_errors.append(
                     f"Tool '{tool_id}' not found in any source"
@@ -268,17 +292,29 @@ class ToolFilterRegistry:
                 if a2a_result.get("error"):
                     result.validation_errors.append(a2a_result["error"])
 
+        # Process MCP Runtime tools
+        if mcp_tool_ids:
+            mcp_result = self._load_mcp_runtime_tools(mcp_tool_ids, log_prefix, auth_token=auth_token)
+            if mcp_result.get("client"):
+                result.tools.append(mcp_result["client"])
+                result.clients["mcp_runtime"] = mcp_result["client"]
+                result.tool_ids_by_source["mcp"] = mcp_tool_ids
+            if mcp_result.get("error"):
+                result.validation_errors.append(mcp_result["error"])
+
         # Log summary
         local_count = len(result.tool_ids_by_source["local"])
         gateway_count = len(result.tool_ids_by_source["gateway"])
         a2a_count = len(result.tool_ids_by_source["a2a"])
+        mcp_count = len(result.tool_ids_by_source["mcp"])
 
         logger.debug(f"{log_prefix} Local tools: {local_count}")
         logger.debug(f"{log_prefix} Gateway tools: {gateway_count}")
         logger.debug(f"{log_prefix} A2A agents: {a2a_count}")
+        logger.debug(f"{log_prefix} MCP Runtime tools: {mcp_count}")
         logger.info(
             f"{log_prefix} Total enabled tools: {len(result.tools)} "
-            f"(local={local_count}, gateway={gateway_count}, a2a={a2a_count})"
+            f"(local={local_count}, gateway={gateway_count}, a2a={a2a_count}, mcp={mcp_count})"
         )
 
         return result
@@ -343,6 +379,40 @@ class ToolFilterRegistry:
             logger.error(f"{log_prefix} Failed to create A2A tool {agent_id}: {e}")
             return {"error": f"A2A tool creation failed for {agent_id}: {e}"}
 
+    def _load_mcp_runtime_tools(
+        self,
+        tool_ids: List[str],
+        log_prefix: str,
+        auth_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Load MCP Runtime tools (e.g., Gmail 3LO).
+
+        Args:
+            tool_ids: List of MCP runtime tool IDs
+            log_prefix: Prefix for log messages
+            auth_token: Cognito JWT for MCP Runtime Bearer auth
+
+        Returns:
+            Dict with "client" and/or "error"
+        """
+        factory = self._get_mcp_runtime_client_factory()
+        if not factory:
+            return {"error": "MCP Runtime client factory not available"}
+
+        try:
+            client = factory(enabled_tool_ids=tool_ids, auth_token=auth_token)
+            if client:
+                logger.info(f"{log_prefix} MCP Runtime client created: {tool_ids}")
+                return {"client": client}
+            else:
+                if not auth_token:
+                    return {"error": "MCP tools (e.g. Gmail) require sign-in. Please authenticate to use these tools."}
+                return {"error": "MCP Runtime is not configured for this environment."}
+        except Exception as e:
+            logger.error(f"{log_prefix} Failed to create MCP Runtime client: {e}")
+            return {"error": f"MCP tools failed to load: {e}"}
+
 
 # Module-level singleton for convenience
 _default_registry: Optional[ToolFilterRegistry] = None
@@ -360,6 +430,7 @@ def filter_tools(
     enabled_tool_ids: Optional[List[str]],
     filters: Optional[ToolFilters] = None,
     log_prefix: str = "",
+    auth_token: Optional[str] = None,
 ) -> FilteredToolResult:
     """
     Convenience function to filter tools using the default registry.
@@ -368,6 +439,7 @@ def filter_tools(
         enabled_tool_ids: List of tool IDs to enable
         filters: Optional ToolFilters (allowed/rejected patterns)
         log_prefix: Prefix for log messages
+        auth_token: Cognito JWT for MCP Runtime Bearer auth
 
     Returns:
         FilteredToolResult with tools, metadata, clients, and errors
@@ -388,4 +460,5 @@ def filter_tools(
         enabled_tool_ids=enabled_tool_ids,
         filters=filters,
         log_prefix=log_prefix,
+        auth_token=auth_token,
     )

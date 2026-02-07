@@ -135,7 +135,8 @@ async def invocations(request: InvocationRequest, http_request: Request):
             system_prompt=input_data.system_prompt,
             caching_enabled=input_data.caching_enabled,
             compaction_enabled=input_data.compaction_enabled,
-            api_keys=input_data.api_keys
+            api_keys=input_data.api_keys,
+            auth_token=input_data.auth_token,
         )
 
         # Stream response from agent

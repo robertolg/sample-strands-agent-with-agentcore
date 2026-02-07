@@ -20,28 +20,36 @@ export async function POST() {
     // Clone config to avoid mutating the imported object
     const config = JSON.parse(JSON.stringify(toolsConfigFallback))
 
-    // Resolve SSM parameters for A2A runtime agents
-    if (config.agentcore_runtime_a2a && config.agentcore_runtime_a2a.length > 0) {
-      const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm')
-      const ssmClient = new SSMClient({ region: process.env.AWS_REGION || 'us-west-2' })
+    // Resolve SSM parameters for A2A runtime agents and MCP runtime servers
+    const ssmSections = [
+      { key: 'agentcore_runtime_a2a', label: 'A2A' },
+      { key: 'agentcore_runtime_mcp', label: 'MCP' },
+    ]
 
-      console.log(`[API] Resolving ${config.agentcore_runtime_a2a.length} A2A runtime ARNs from SSM...`)
+    for (const section of ssmSections) {
+      const items = (config as any)[section.key]
+      if (items && items.length > 0) {
+        const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm')
+        const ssmClient = new SSMClient({ region: process.env.AWS_REGION || 'us-west-2' })
 
-      for (const agent of config.agentcore_runtime_a2a) {
-        if (agent.runtime_arn_ssm) {
-          try {
-            const command = new GetParameterCommand({ Name: agent.runtime_arn_ssm })
-            const response = await ssmClient.send(command)
-            if (response.Parameter?.Value) {
-              agent.runtime_arn = response.Parameter.Value
-              console.log(`[API] ✓ Resolved ${agent.id}: ${agent.runtime_arn}`)
-            } else {
-              console.error(`[API] ✗ No value for SSM parameter ${agent.runtime_arn_ssm}`)
-              delete agent.runtime_arn  // Remove field instead of setting undefined
+        console.log(`[API] Resolving ${items.length} ${section.label} runtime ARNs from SSM...`)
+
+        for (const item of items) {
+          if (item.runtime_arn_ssm) {
+            try {
+              const command = new GetParameterCommand({ Name: item.runtime_arn_ssm })
+              const response = await ssmClient.send(command)
+              if (response.Parameter?.Value) {
+                item.runtime_arn = response.Parameter.Value
+                console.log(`[API] ✓ Resolved ${item.id}: ${item.runtime_arn}`)
+              } else {
+                console.error(`[API] ✗ No value for SSM parameter ${item.runtime_arn_ssm}`)
+                delete item.runtime_arn
+              }
+            } catch (error: any) {
+              console.error(`[API] ✗ Failed to resolve SSM parameter ${item.runtime_arn_ssm}:`, error.message)
+              delete item.runtime_arn
             }
-          } catch (error: any) {
-            console.error(`[API] ✗ Failed to resolve SSM parameter ${agent.runtime_arn_ssm}:`, error.message)
-            delete agent.runtime_arn  // Remove field instead of setting undefined
           }
         }
       }
@@ -57,6 +65,7 @@ export async function POST() {
       browser_automation: config.browser_automation?.length || 0,
       gateway_targets: config.gateway_targets?.length || 0,
       agentcore_runtime_a2a: config.agentcore_runtime_a2a?.length || 0,
+      agentcore_runtime_mcp: (config as any).agentcore_runtime_mcp?.length || 0,
     })
   } catch (error: any) {
     console.error('[API] Error syncing tool registry:', error)

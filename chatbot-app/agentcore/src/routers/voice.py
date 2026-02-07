@@ -64,6 +64,7 @@ async def voice_stream(
     session_id: Optional[str] = Query(None, description="Session ID (from BFF)"),
     user_id: Optional[str] = Query(None, description="User ID (from BFF)"),
     enabled_tools: Optional[str] = Query(None, description="JSON array of enabled tool IDs"),
+    auth_token: Optional[str] = Query(None, description="Cognito JWT for MCP Runtime 3LO"),
 ):
     """WebSocket endpoint for real-time voice chat"""
     await websocket.accept()
@@ -72,24 +73,27 @@ async def voice_stream(
     session_id = _get_param_from_request(websocket, "session-id", session_id)
     user_id = _get_param_from_request(websocket, "user-id", user_id)
     tools_list = _get_enabled_tools_from_request(websocket, enabled_tools)
+    auth_token = _get_param_from_request(websocket, "auth-token", auth_token)
 
-    # Cloud mode: receive config from first message (AgentCore Runtime proxy workaround)
-    if not session_id or not tools_list:
-        try:
-            first_msg = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
-            if first_msg.get("type") == "config":
-                session_id = first_msg.get("session_id") or session_id
-                user_id = first_msg.get("user_id") or user_id
-                tools_list = first_msg.get("enabled_tools") or tools_list
-                logger.info(f"[Voice] Config received from client message")
-        except Exception as e:
-            logger.warning(f"[Voice] Config message error: {e}")
+    # Always read config message from client (sent on WebSocket open)
+    # Required for auth_token which is NOT in query params, and also supplements
+    # any missing params in cloud mode (AgentCore Runtime proxy workaround)
+    try:
+        first_msg = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
+        if first_msg.get("type") == "config":
+            session_id = first_msg.get("session_id") or session_id
+            user_id = first_msg.get("user_id") or user_id
+            tools_list = first_msg.get("enabled_tools") or tools_list
+            auth_token = first_msg.get("auth_token") or auth_token
+            logger.info(f"[Voice] Config received from client message")
+    except Exception as e:
+        logger.warning(f"[Voice] Config message error: {e}")
 
     if not session_id:
         session_id = str(uuid.uuid4())
         logger.info(f"[Voice] Generated new session ID: {session_id}")
 
-    logger.info(f"[Voice] WebSocket connected: session={session_id}, user={user_id}, tools={len(tools_list)}")
+    logger.info(f"[Voice] WebSocket connected: session={session_id}, user={user_id}, tools={len(tools_list)}, auth_token={'present' if auth_token else 'missing'}")
 
     voice_agent = None
 
@@ -100,6 +104,7 @@ async def voice_stream(
             session_id=session_id,
             user_id=user_id,
             enabled_tools=tools_list,
+            auth_token=auth_token,
         )
 
         # Store in active sessions
@@ -278,6 +283,7 @@ async def ws_stream(
     session_id: Optional[str] = Query(None, description="Session ID"),
     user_id: Optional[str] = Query(None, description="User ID"),
     enabled_tools: Optional[str] = Query(None, description="JSON array of enabled tool IDs"),
+    auth_token: Optional[str] = Query(None, description="Cognito JWT for MCP Runtime 3LO"),
 ):
     """
     WebSocket endpoint for AgentCore Runtime (cloud mode)
@@ -291,4 +297,5 @@ async def ws_stream(
         session_id=session_id,
         user_id=user_id,
         enabled_tools=enabled_tools,
+        auth_token=auth_token,
     )

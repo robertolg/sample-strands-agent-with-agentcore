@@ -3,7 +3,7 @@
 import React from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { FlaskConical, CheckCircle2, XCircle, Globe } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 
 interface InterruptApprovalModalProps {
   isOpen: boolean
@@ -12,14 +12,7 @@ interface InterruptApprovalModalProps {
   interrupts: Array<{
     id: string
     name: string
-    reason?: {
-      tool_name?: string
-      plan?: string
-      plan_preview?: string
-      task?: string
-      task_preview?: string
-      max_steps?: number
-    }
+    reason?: Record<string, any>
   }>
 }
 
@@ -29,77 +22,49 @@ export function InterruptApprovalModal({
   onReject,
   interrupts
 }: InterruptApprovalModalProps) {
-  // Handle single interrupt (research or browser approval)
   const interrupt = interrupts[0]
 
   if (!interrupt) return null
 
-  const isResearchApproval = interrupt.name === "chatbot-research-approval"
-  const isBrowserApproval = interrupt.name === "chatbot-browser-approval"
-
-  // Research Agent fields
-  const plan = interrupt.reason?.plan || ""
-
-  // Browser-Use Agent fields
-  const task = interrupt.reason?.task || ""
-  const maxSteps = interrupt.reason?.max_steps || 15
+  const query = interrupt.reason?.query || ""
+  const intent = interrupt.reason?.intent || ""
+  const maxDelete = interrupt.reason?.max_delete || 50
 
   return (
     <Dialog open={isOpen} onOpenChange={() => {}}>
-      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
+      <DialogContent className="max-w-md">
         <DialogHeader>
           <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-lg ${isBrowserApproval ? 'bg-purple-500/10' : 'bg-blue-500/10'}`}>
-              {isBrowserApproval ? (
-                <Globe className="w-5 h-5 text-purple-500" />
-              ) : (
-                <FlaskConical className="w-5 h-5 text-blue-500" />
-              )}
+            <div className="p-2 rounded-lg bg-red-500/10">
+              <Trash2 className="w-5 h-5 text-red-500" />
             </div>
             <div>
-              <DialogTitle className="text-heading font-semibold">
-                {isBrowserApproval ? 'Browser Automation Approval Required' : 'Research Approval Required'}
-              </DialogTitle>
-              <DialogDescription className="text-label mt-0.5">
-                {isBrowserApproval
-                  ? 'Review the browser task before proceeding'
-                  : 'Review the research plan before proceeding'}
+              <DialogTitle>Delete Emails</DialogTitle>
+              <DialogDescription className="text-xs">
+                This action cannot be undone
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
-        {/* Content - Scrollable */}
-        <div className="flex-1 overflow-y-auto mt-4 mb-4">
-          <div className="rounded-lg border bg-muted/20 p-5">
-            <h3 className="text-caption font-semibold mb-3 text-muted-foreground uppercase tracking-wide">
-              {isBrowserApproval ? 'Browser Task' : 'Research Plan'}
-            </h3>
-            <div className="prose prose-sm dark:prose-invert max-w-none">
-              <pre className="whitespace-pre-wrap font-sans text-label leading-relaxed text-foreground/90 bg-transparent border-0 p-0 m-0">
-                {isBrowserApproval ? task : plan}
-              </pre>
-            </div>
+        <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
+          <p className="text-sm text-foreground">{intent}</p>
+          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+            <span>Query: <code className="px-1.5 py-0.5 rounded bg-muted text-foreground">{query}</code></span>
+            <span>Max: <strong className="text-foreground">{maxDelete}</strong></span>
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex items-center justify-end gap-3 pt-2 border-t">
-          <Button
-            variant="outline"
-            onClick={onReject}
-            className="gap-2"
-          >
-            <XCircle className="w-4 h-4" />
-            Decline
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" onClick={onReject}>
+            Cancel
           </Button>
           <Button
-            variant="default"
+            size="sm"
             onClick={onApprove}
-            className={`gap-2 ${isBrowserApproval ? 'bg-purple-600 hover:bg-purple-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+            className="bg-red-600 hover:bg-red-700"
           >
-            <CheckCircle2 className="w-4 h-4" />
-            {isBrowserApproval ? 'Approve & Start Browser Task' : 'Approve & Start Research'}
+            Delete
           </Button>
         </div>
       </DialogContent>

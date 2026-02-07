@@ -33,6 +33,7 @@ class BaseAgent(ABC):
         system_prompt: Optional[str] = None,
         caching_enabled: Optional[bool] = None,
         compaction_enabled: Optional[bool] = None,
+        auth_token: Optional[str] = None,
     ):
         """
         Initialize base agent with common configuration
@@ -50,6 +51,7 @@ class BaseAgent(ABC):
         self.session_id = session_id
         self.user_id = user_id or session_id
         self.enabled_tools = enabled_tools
+        self.auth_token = auth_token  # Cognito JWT for MCP Runtime 3LO
         self.gateway_client = None  # Gateway MCP client for lifecycle management
 
         # Model configuration
@@ -90,12 +92,16 @@ class BaseAgent(ABC):
         """Load and filter tools based on enabled_tools"""
         result = filter_tools(
             enabled_tool_ids=self.enabled_tools,
-            log_prefix=f"[{self.__class__.__name__}]"
+            log_prefix=f"[{self.__class__.__name__}]",
+            auth_token=self.auth_token,
         )
 
         # Store gateway client for lifecycle management
         if result.clients.get("gateway"):
             self.gateway_client = result.clients["gateway"]
+
+        # Store validation errors for surfacing to user (e.g., MCP auth missing)
+        self.tool_validation_errors = result.validation_errors
 
         return result.tools
 

@@ -139,19 +139,40 @@ export function ToolsDropdown({
     return enabled;
   }, [availableTools]);
 
-  // Filter tools based on search
+  // Filter and sort tools: enabled tools first, then by original order
   const filteredTools = useMemo(() => {
-    if (!searchQuery.trim()) return allTools;
+    let tools = allTools;
 
-    const query = searchQuery.toLowerCase();
-    return allTools.filter(tool => {
-      const nameMatch = tool.name.toLowerCase().includes(query);
-      const descMatch = tool.description?.toLowerCase().includes(query);
-      const tags = (tool as any).tags || [];
-      const tagMatch = tags.some((tag: string) => tag.toLowerCase().includes(query));
-      return nameMatch || descMatch || tagMatch;
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      tools = tools.filter(tool => {
+        const nameMatch = tool.name.toLowerCase().includes(query);
+        const descMatch = tool.description?.toLowerCase().includes(query);
+        const tags = (tool as any).tags || [];
+        const tagMatch = tags.some((tag: string) => tag.toLowerCase().includes(query));
+        return nameMatch || descMatch || tagMatch;
+      });
+    }
+
+    // Sort enabled tools to the top while preserving relative order within each group
+    const checkEnabled = (tool: Tool): boolean => {
+      const isDynamic = (tool as any).isDynamic === true;
+      const nestedTools = (tool as any).tools || [];
+      if (isDynamic && nestedTools.length > 0) {
+        return nestedTools.some((nt: any) => nt.enabled);
+      }
+      return tool.enabled;
+    };
+
+    return [...tools].sort((a, b) => {
+      // Primary: enabled tools first
+      const aEnabled = checkEnabled(a) ? 1 : 0;
+      const bEnabled = checkEnabled(b) ? 1 : 0;
+      if (aEnabled !== bEnabled) return bEnabled - aEnabled;
+      // Secondary: alphabetical by name
+      return a.name.localeCompare(b.name);
     });
-  }, [allTools, searchQuery]);
+  }, [allTools, searchQuery, availableTools]);
 
   const handleToolToggle = (toolId: string, tool: Tool) => {
     const isDynamic = (tool as any).isDynamic === true;

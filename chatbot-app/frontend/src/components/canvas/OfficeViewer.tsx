@@ -101,7 +101,7 @@ export function OfficeViewer({ s3Url, filename }: OfficeViewerProps) {
           src={viewerUrl}
           className="w-full h-full border-0"
           title={`Preview: ${filename}`}
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
         />
       )}
     </div>

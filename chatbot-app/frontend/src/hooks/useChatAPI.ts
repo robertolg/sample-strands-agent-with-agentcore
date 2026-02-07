@@ -165,6 +165,8 @@ interface UseChatAPIProps {
   gatewayToolIds?: string[]  // Gateway tool IDs from frontend
   sessionId: string | null
   setSessionId: React.Dispatch<React.SetStateAction<string | null>>
+  currentModelId: string  // Per-session model ID from useChat state
+  currentTemperature: number  // Per-session temperature from useChat state
 }
 
 // Session preferences returned when loading a session
@@ -197,7 +199,9 @@ export const useChatAPI = ({
   onSessionCreated,
   gatewayToolIds = [],
   sessionId,
-  setSessionId
+  setSessionId,
+  currentModelId,
+  currentTemperature
 }: UseChatAPIProps) => {
 
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -284,9 +288,10 @@ export const useChatAPI = ({
         ...authHeaders
       }
 
-      // Include session ID in headers if available
-      if (sessionId) {
-        headers['X-Session-ID'] = sessionId
+      // Include session ID in headers if available (use ref to avoid dependency)
+      const currentSessionId = sessionIdRef.current
+      if (currentSessionId) {
+        headers['X-Session-ID'] = currentSessionId
       }
 
       const response = await fetch(getApiUrl('tools'), {
@@ -300,7 +305,7 @@ export const useChatAPI = ({
         const responseSessionId = response.headers.get('X-Session-ID')
 
         // Only update session ID if we don't have one yet (initial load)
-        if (responseSessionId && !sessionId) {
+        if (responseSessionId && !currentSessionId) {
           setSessionId(responseSessionId)
         }
 
@@ -314,7 +319,7 @@ export const useChatAPI = ({
     } catch (error) {
       setAvailableTools([])
     }
-  }, [setAvailableTools, sessionId])
+  }, [setAvailableTools])
 
   /**
    * Toggle tool enabled state (in-memory only)
@@ -528,6 +533,8 @@ export const useChatAPI = ({
         const formData = new FormData()
         formData.append('message', messageToSend)
         formData.append('enabled_tools', JSON.stringify(allEnabledToolIds))
+        formData.append('model_id', currentModelId)
+        formData.append('temperature', String(currentTemperature))
 
         // Add system prompt if provided
         if (systemPrompt) {
@@ -563,6 +570,8 @@ export const useChatAPI = ({
           },
           body: JSON.stringify({
             message: messageToSend,
+            model_id: currentModelId,
+            temperature: currentTemperature,
             enabled_tools: allEnabledToolIds,
             ...(requestType && { request_type: requestType }),
             ...(systemPrompt && { system_prompt: systemPrompt }),
@@ -596,26 +605,36 @@ export const useChatAPI = ({
       // Store reader ref for cleanup on abort
       readerRef.current = reader
 
+      // Capture the session ID this stream belongs to.
+      // Used to skip event dispatch when the user switches sessions mid-stream.
+      const streamSessionId = sessionIdRef.current
+
       let buffer = ''
 
       while (true) {
         const { done, value } = await reader.read()
-        
+
         if (done) break
 
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
         buffer = lines.pop() || ''
 
+        // Session guard: if user switched sessions, consume the stream
+        // without dispatching events so the backend can finish normally.
+        if (sessionIdRef.current !== streamSessionId) {
+          continue
+        }
+
         for (const line of lines) {
           if (line.startsWith('event: ')) {
             continue
           }
-          
+
           if (line.startsWith('data: ')) {
             try {
               const eventData = JSON.parse(line.substring(6))
-              
+
               // Debug: log metadata events (always show in production for debugging)
               if (eventData.type === 'metadata') {
                 logger.info('[useChatAPI] Received metadata event:', eventData)
@@ -636,6 +655,12 @@ export const useChatAPI = ({
       }
 
       setUIState(prev => ({ ...prev, isConnected: true }))
+
+      // Skip post-stream callbacks if user switched sessions during streaming
+      if (sessionIdRef.current !== streamSessionId) {
+        logger.info(`[useChatAPI] Stream finished for stale session ${streamSessionId}, skipping callbacks`)
+        return
+      }
 
       // Session metadata is automatically updated by backend (/api/stream/chat)
       // Just check if it's a new session and refresh the list
@@ -676,7 +701,7 @@ export const useChatAPI = ({
       
       onError?.(errorMessage)
     }
-  }, [handleStreamEvent, handleLegacyEvent, setUIState, setMessages, availableTools, gatewayToolIds, onSessionCreated])
+  }, [handleStreamEvent, handleLegacyEvent, setUIState, setMessages, availableTools, gatewayToolIds, onSessionCreated, currentModelId, currentTemperature])
   // sessionId removed from dependency array - using sessionIdRef.current instead
 
   /**

@@ -1,336 +1,95 @@
 """
-PowerPoint Presentation Tools - Modern high-level API for PowerPoint management.
+PowerPoint Presentation Tools
 
-Available Tools (11):
-1. list_my_powerpoint_presentations - List workspace presentations
-2. get_presentation_layouts - Get all available slide layouts
-3. analyze_presentation - Analyze presentation structure
-4. create_presentation - Create from outline or blank
-5. update_slide_content - Edit slides with high-level operations
-6. add_slide - Add new slides
-7. delete_slides - Delete multiple slides
-8. move_slide - Reorder slides
-9. duplicate_slide - Copy slides
-10. update_slide_notes - Update speaker notes
-11. preview_presentation_slides - Get slide screenshots for visual inspection
-
-Features:
-- Safe high-level API (no python-pptx code needed)
-- Feature-based element detection (catches animations, custom shapes, etc.)
-- Markdown text formatting support
-- Automatic index management
-- Clear error messages
-- Operation-based editing
-
-Element Types (simplified):
-- text: Any text-editable shape (textbox, placeholder, autoshape, animation text, etc.)
-- picture: Image shapes
-- table: Table shapes
-- chart: Chart shapes
-- group: Grouped shapes
-- unknown: Other shapes
-
-Note: Uploaded .pptx files are automatically stored to workspace by agent.py
-Pattern follows word_document_tool for consistency.
+Tools for creating and editing PowerPoint presentations.
+Uses Code Interpreter for python-pptx operations.
 """
 
 import os
-import re
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from strands import tool, ToolContext
 from bedrock_agentcore.tools.code_interpreter_client import CodeInterpreter
 from workspace import PowerPointManager
 
+# Import utilities from lib
+from .lib.ppt_utils import (
+    validate_presentation_name,
+    sanitize_presentation_name,
+    get_code_interpreter_id,
+    get_user_session_ids,
+    save_ppt_artifact,
+    get_file_compatibility_error,
+    upload_ppt_helpers_to_ci,
+    make_error_response,
+)
+from .lib.slide_examples import get_examples, get_all_categories
+
 logger = logging.getLogger(__name__)
 
 
-def _validate_presentation_name(name: str) -> tuple[bool, Optional[str]]:
-    """Validate presentation name meets requirements (without extension).
-
-    Rules:
-    - Only letters (a-z, A-Z), numbers (0-9), and hyphens (-)
-    - No spaces, underscores, or special characters
-    - No consecutive hyphens
-    - No leading/trailing hyphens
-
-    Args:
-        name: Presentation name without extension (e.g., "sales-deck")
-
-    Returns:
-        (is_valid, error_message)
-        - (True, None) if valid
-        - (False, error_message) if invalid
-    """
-    # Check for empty name
-    if not name:
-        return False, "Presentation name cannot be empty"
-
-    # Check for valid characters: only letters, numbers, hyphens
-    if not re.match(r'^[a-zA-Z0-9\-]+$', name):
-        invalid_chars = re.findall(r'[^a-zA-Z0-9\-]', name)
-        return False, f"Invalid characters in name: {set(invalid_chars)}. Use only letters, numbers, and hyphens (-)."
-
-    # Check for consecutive hyphens
-    if '--' in name:
-        return False, "Name cannot contain consecutive hyphens (--)"
-
-    # Check for leading/trailing hyphens
-    if name.startswith('-') or name.endswith('-'):
-        return False, "Name cannot start or end with a hyphen"
-
-    return True, None
+# Backward compatibility aliases
+_validate_presentation_name = validate_presentation_name
+_sanitize_presentation_name_for_bedrock = sanitize_presentation_name
+_get_code_interpreter_id = get_code_interpreter_id
+_get_user_session_ids = get_user_session_ids
+_save_ppt_artifact = save_ppt_artifact
+_get_file_compatibility_error_response = get_file_compatibility_error
+_upload_ppt_helpers_to_ci = upload_ppt_helpers_to_ci
 
 
-def _sanitize_presentation_name_for_bedrock(filename: str) -> str:
-    """Sanitize existing filename for Bedrock API (removes extension).
+@tool
+def get_slide_code_examples(category: str = "text_layout") -> Dict[str, Any]:
+    """Get python-pptx code examples as reference for creating slides.
 
-    Use this ONLY for existing files being read from S3.
-    For new files, use _validate_presentation_name() instead.
-
-    This must match the sanitization done during upload (agent.py _sanitize_filename)
-    to ensure files can be found after being stored.
+    These are reference examples - adapt them to your content needs.
+    Also useful when debugging code errors.
 
     Args:
-        filename: Original filename with extension (e.g., "test_deck_v2.pptx")
+        category: Example category to retrieve:
+            - "text_layout": Text arrangement, hierarchy, bullets
+            - "number_highlight": Numbers/KPI emphasis
+            - "grid_layout": Multiple items, comparisons
+            - "image_text": Image + text combinations
+            - "visual_emphasis": Highlights, color boxes, accents
+            - "all": Get all categories
 
     Returns:
-        Sanitized name without extension (e.g., "test-deck-v2", "AWS-AI-Agents-FCD-251211")
+        Code examples with descriptions for the requested category
     """
-    # Remove extension
-    if '.' in filename:
-        name, ext = filename.rsplit('.', 1)
-    else:
-        name = filename
-
-    # Replace underscores AND spaces with hyphens (matches agent.py _sanitize_filename)
-    name = name.replace('_', '-').replace(' ', '-')
-
-    # Keep only allowed characters: alphanumeric, hyphens, parentheses, square brackets
-    # This matches agent.py's _sanitize_filename behavior
-    name = re.sub(r'[^a-zA-Z0-9\-\(\)\[\]]', '', name)
-
-    # Replace consecutive hyphens with single hyphen
-    name = re.sub(r'\-+', '-', name)
-
-    # Trim hyphens from start/end
-    name = name.strip('-')
-
-    # If name becomes empty, use default
-    if not name:
-        name = 'presentation'
-
-    if name != filename.replace('.pptx', ''):
-        logger.info(f"Sanitized presentation name for Bedrock: '{filename}' → '{name}'")
-
-    return name
-
-
-def _get_code_interpreter_id() -> Optional[str]:
-    """Get Custom Code Interpreter ID from environment or Parameter Store"""
-    # 1. Check environment variable (set by AgentCore Runtime)
-    code_interpreter_id = os.getenv('CODE_INTERPRETER_ID')
-    if code_interpreter_id:
-        logger.info(f"Found CODE_INTERPRETER_ID in environment: {code_interpreter_id}")
-        return code_interpreter_id
-
-    # 2. Try Parameter Store (for local development or alternative configuration)
     try:
-        import boto3
-        project_name = os.getenv('PROJECT_NAME', 'strands-agent-chatbot')
-        environment = os.getenv('ENVIRONMENT', 'dev')
-        region = os.getenv('AWS_REGION', 'us-west-2')
-        param_name = f"/{project_name}/{environment}/agentcore/code-interpreter-id"
+        if category == "all":
+            examples = get_examples()
+        else:
+            if category not in get_all_categories():
+                return {
+                    "content": [{
+                        "text": f"Unknown category: {category}\n\n"
+                               f"Available: {', '.join(get_all_categories())}"
+                    }],
+                    "status": "error"
+                }
+            examples = get_examples(category)
 
-        logger.info(f"Checking Parameter Store for Code Interpreter ID: {param_name}")
-        ssm = boto3.client('ssm', region_name=region)
-        response = ssm.get_parameter(Name=param_name)
-        code_interpreter_id = response['Parameter']['Value']
-        logger.info(f"Found CODE_INTERPRETER_ID in Parameter Store: {code_interpreter_id}")
-        return code_interpreter_id
-    except Exception as e:
-        logger.warning(f"Custom Code Interpreter ID not found in Parameter Store: {e}")
-        return None
+        # Format output
+        output_parts = []
+        for cat_name, cat_data in examples.items():
+            output_parts.append(f"## {cat_name}\n")
+            output_parts.append(f"**When to use:** {cat_data['when_to_use']}\n")
 
+            for example in cat_data['examples']:
+                output_parts.append(f"\n### {example['name']}\n")
+                output_parts.append(f"```python\n{example['code'].strip()}\n```\n")
 
-def _get_user_session_ids(tool_context: ToolContext) -> tuple[str, str]:
-    """Extract user_id and session_id from ToolContext
-
-    Returns:
-        (user_id, session_id) tuple
-    """
-    # Extract from invocation_state (set by agent)
-    invocation_state = tool_context.invocation_state
-    user_id = invocation_state.get('user_id', 'default_user')
-    session_id = invocation_state.get('session_id', 'default_session')
-
-    logger.info(f"Extracted IDs: user_id={user_id}, session_id={session_id}")
-    return user_id, session_id
-
-
-def _save_ppt_artifact(
-    tool_context: ToolContext,
-    filename: str,
-    s3_url: str,
-    size_kb: str,
-    tool_name: str,
-    user_id: str,
-    session_id: str
-) -> None:
-    """Save PowerPoint presentation as artifact to agent.state for Canvas display.
-
-    Args:
-        tool_context: Strands ToolContext
-        filename: Presentation filename (e.g., "sales-deck.pptx")
-        s3_url: Full S3 URL (e.g., "s3://bucket/path/sales-deck.pptx")
-        size_kb: File size string (e.g., "1.2 MB")
-        tool_name: Tool that created this
-        user_id: User ID
-        session_id: Session ID
-    """
-    from datetime import datetime, timezone
-
-    try:
-        # Generate artifact ID using filename (without extension)
-        ppt_name = filename.replace('.pptx', '')
-        artifact_id = f"ppt-{ppt_name}"
-
-        # Get current artifacts from agent.state
-        artifacts = tool_context.agent.state.get("artifacts") or {}
-
-        # Create/update artifact
-        artifacts[artifact_id] = {
-            "id": artifact_id,
-            "type": "powerpoint_presentation",
-            "title": filename,
-            "content": s3_url,  # Full S3 URL for OfficeViewer
-            "tool_name": tool_name,
-            "metadata": {
-                "filename": filename,
-                "s3_url": s3_url,
-                "size_kb": size_kb,
-                "user_id": user_id,
-                "session_id": session_id
-            },
-            "created_at": artifacts.get(artifact_id, {}).get("created_at", datetime.now(timezone.utc).isoformat()),
-            "updated_at": datetime.now(timezone.utc).isoformat()
+        return {
+            "content": [{"text": "\n".join(output_parts)}],
+            "status": "success",
+            "metadata": {"category": category}
         }
 
-        # Save to agent.state
-        tool_context.agent.state.set("artifacts", artifacts)
-
-        # Sync agent state to persistence
-        session_manager = tool_context.invocation_state.get("session_manager")
-        if not session_manager and hasattr(tool_context.agent, 'session_manager'):
-            session_manager = tool_context.agent.session_manager
-
-        if session_manager:
-            session_manager.sync_agent(tool_context.agent)
-            logger.info(f"Saved PPT artifact: {artifact_id}")
-        else:
-            logger.warning(f"No session_manager found, PPT artifact not persisted: {artifact_id}")
-
     except Exception as e:
-        logger.error(f"Failed to save PPT artifact: {e}")
-
-
-def _get_file_compatibility_error_response(filename: str, error_msg: str, operation: str) -> Dict[str, Any]:
-    """Generate file compatibility error response
-
-    Args:
-        filename: The problematic file name
-        error_msg: The error message from Code Interpreter
-        operation: The operation being attempted (e.g., "analyze", "update", "add slide to")
-
-    Returns:
-        Error response dict with user instructions
-    """
-    return {
-        "content": [{
-            "text": f"**Cannot {operation} presentation: File compatibility issue**\n\n"
-                   f"**The file `{filename}` is not compatible with the editing tools.**\n\n"
-                   f"**Please ask the user to choose one of these options:**\n\n"
-                   f"**Option 1: Preserve design (Recommended for editing)**\n"
-                   f"1. Open the file in Microsoft PowerPoint\n"
-                   f"2. Save as → PowerPoint Presentation (.pptx)\n"
-                   f"3. Upload the re-saved file\n\n"
-                   f"**Option 2: Create new presentation from content**\n"
-                   f"1. Open the file in Microsoft PowerPoint\n"
-                   f"2. Save as → PDF\n"
-                   f"3. Upload the PDF file\n"
-                   f"4. I will analyze the PDF and create a new presentation\n\n"
-                   f"**DO NOT try other methods.** This is a file format issue that requires user action.\n\n"
-                   f"<details>\n"
-                   f"<summary>Technical error details</summary>\n\n"
-                   f"```\n{error_msg[:500]}\n```\n"
-                   f"</details>"
-        }],
-        "status": "error"
-    }
-
-
-
-
-def _upload_ppt_helpers_to_ci(code_interpreter: CodeInterpreter) -> None:
-    """Upload ppt_helpers.py module to Code Interpreter workspace
-
-    Uploads the module twice with different names:
-    - presentation_editor.py: Used by update_slide_content (PresentationEditor class)
-    - ppt_helpers.py: Used by create_presentation (generate_ppt_structure function)
-
-    Args:
-        code_interpreter: Active CodeInterpreter instance
-    """
-    try:
-        # Read ppt_helpers.py content
-        helpers_path = os.path.join(os.path.dirname(__file__), 'lib', 'ppt_helpers.py')
-
-        if os.path.exists(helpers_path):
-            with open(helpers_path, 'rb') as f:
-                helpers_bytes = f.read()
-
-            # Base64 encode to safely transfer through Code Interpreter
-            import base64
-            encoded_content = base64.b64encode(helpers_bytes).decode('utf-8')
-
-            # Upload as both filenames (different imports need different names)
-            upload_code = f'''
-import base64
-
-# Decode the module content
-module_content = base64.b64decode('{encoded_content}')
-
-# Save as presentation_editor.py (for update_slide_content)
-with open('presentation_editor.py', 'wb') as f:
-    f.write(module_content)
-
-# Save as ppt_helpers.py (for create_presentation)
-with open('ppt_helpers.py', 'wb') as f:
-    f.write(module_content)
-
-print("presentation_editor.py and ppt_helpers.py modules loaded successfully")
-'''
-
-            response = code_interpreter.invoke("executeCode", {
-                "code": upload_code,
-                "language": "python",
-                "clearContext": False
-            })
-
-            # Check for errors
-            for event in response.get("stream", []):
-                result = event.get("result", {})
-                if result.get("isError", False):
-                    error_msg = result.get("structuredContent", {}).get("stderr", "Unknown error")
-                    logger.error(f"Failed to upload ppt_helpers: {error_msg[:200]}")
-                    return
-
-            logger.debug(" Uploaded presentation_editor.py and ppt_helpers.py to Code Interpreter")
-        else:
-            logger.warning(f"ppt_helpers.py not found at {helpers_path}")
-
-    except Exception as e:
-        logger.error(f"Failed to upload ppt_helpers: {e}")
+        logger.error(f"get_slide_code_examples error: {e}")
+        return make_error_response(str(e))
 
 
 @tool(context=True)
@@ -1169,91 +928,20 @@ def add_slide(
     tool_context: ToolContext,
     custom_code: str | None = None
 ) -> Dict[str, Any]:
-    """Add new slide with optional custom python-pptx code for maximum flexibility.
+    """Add new slide with optional custom python-pptx code.
+
+    Use get_slide_code_examples() for custom_code reference.
 
     Args:
-        presentation_name: Source presentation name WITHOUT extension
-        layout_name: Layout name. Use get_presentation_layouts() to get exact names.
-        position: Position to insert (0-based, -1 to append)
-        output_name: Output presentation name WITHOUT extension (must differ from source)
-        custom_code: Optional Python code to customize the slide. Available variables:
-            - slide: The newly created slide object
-            - prs: Presentation object
-            - Inches, Pt: pptx.util functions for measurements
-            - RGBColor: pptx.dml.color.RGBColor for colors
-            - MSO_SHAPE_TYPE: Shape type constants
-            - CategoryChartData, XL_CHART_TYPE: For creating charts
+        presentation_name: Source presentation name without extension
+        layout_name: Layout name (use get_presentation_layouts() to get exact names)
+        position: Insert position (0-based, -1 to append)
+        output_name: Output name without extension (must differ from source)
+        custom_code: Optional python-pptx code. Available: slide, prs, Inches, Pt, RGBColor
 
-    Example (simple - empty slide):
-        add_slide("deck", "Title Slide", position=0, output_name="deck-v2")
-
-    Example (title and bullet points):
-        add_slide("deck", "Title and Content", position=2, output_name="deck-v2",
-                  custom_code='''
-                  # Set title
-                  slide.shapes.title.text = "Q4 Results"
-
-                  # Add bullet points
-                  content = slide.placeholders[1]
-                  tf = content.text_frame
-                  tf.text = "Revenue: $1M"
-                  p = tf.add_paragraph()
-                  p.text = "Profit: $200K"
-                  p = tf.add_paragraph()
-                  p.text = "Growth: 25%"
-                  ''')
-
-    Example (image):
-        add_slide("deck", "Blank", position=5, output_name="deck-v2",
-                  custom_code='''
-                  # Add image
-                  slide.shapes.add_picture('chart.png', Inches(1), Inches(2), width=Inches(8))
-
-                  # Add caption
-                  textbox = slide.shapes.add_textbox(Inches(1), Inches(6), Inches(8), Inches(0.5))
-                  textbox.text = "Revenue growth over 4 quarters"
-                  ''')
-
-    Example (chart):
-        add_slide("deck", "Title Only", position=3, output_name="deck-v2",
-                  custom_code='''
-                  slide.shapes.title.text = "Revenue Growth"
-
-                  # Create chart data
-                  chart_data = CategoryChartData()
-                  chart_data.categories = ['Q1', 'Q2', 'Q3', 'Q4']
-                  chart_data.add_series('Revenue', (100, 120, 140, 160))
-
-                  # Add chart
-                  chart = slide.shapes.add_chart(
-                      XL_CHART_TYPE.COLUMN_CLUSTERED,
-                      Inches(2), Inches(2), Inches(6), Inches(4.5),
-                      chart_data
-                  )
-                  ''')
-
-    Example (complex layout with matplotlib):
-        add_slide("deck", "Blank", position=10, output_name="deck-v2",
-                  custom_code='''
-                  import matplotlib.pyplot as plt
-
-                  # Generate chart
-                  plt.figure(figsize=(10, 6))
-                  plt.bar(['Q1', 'Q2', 'Q3', 'Q4'], [100, 120, 140, 160])
-                  plt.title('Quarterly Revenue')
-                  plt.ylabel('Revenue ($K)')
-                  plt.savefig('revenue_chart.png', dpi=150, bbox_inches='tight')
-                  plt.close()
-
-                  # Add to slide
-                  slide.shapes.add_picture('revenue_chart.png', Inches(0.5), Inches(1), width=Inches(9))
-
-                  # Add title
-                  title_box = slide.shapes.add_textbox(Inches(1), Inches(0.3), Inches(8), Inches(0.6))
-                  title_box.text = "2024 Revenue Performance"
-                  title_box.text_frame.paragraphs[0].font.size = Pt(32)
-                  title_box.text_frame.paragraphs[0].font.bold = True
-                  ''')
+    Example:
+        add_slide("deck", "Blank", position=0, output_name="deck-v2",
+                  custom_code="slide.shapes.title.text = 'New Slide'")
     """
     try:
         logger.info("=== add_slide called ===")
@@ -1916,143 +1604,67 @@ def update_slide_notes(
 @tool(context=True)
 def create_presentation(
     presentation_name: str,
-    outline: dict | str | None,
-    template_name: str | None,
+    slides: list | str | None,
     tool_context: ToolContext,
-    theme: str | None = None
+    template_name: str | None = None,
 ) -> Dict[str, Any]:
-    """Create new presentation from outline or blank.
+    """Create presentation with custom-designed slides (16:9 widescreen).
+
+    Use get_slide_code_examples() to get reference code for different slide types.
 
     Args:
-        presentation_name: Output presentation name WITHOUT extension
-        outline: Structured outline dict (None for blank)
-                 IMPORTANT: Must be valid JSON - NO trailing commas, NO comments
-                 Format: {
-                     "title": str,
-                     "subtitle": str,
-                     "slides": [
-                         {"title": str, "type": "bullet|chart|image|table|custom", "content": [...]},
-                         {"title": str, "type": "custom", "custom_code": "...python code..."}
-                     ]
-                 }
-        template_name: Template presentation name (optional). Takes priority over theme.
-                       If not specified, will use built-in theme or default.
-        theme: Built-in theme name (optional). Available themes:
-               'modern-blue', 'professional-gray', 'vibrant-orange',
-               'elegant-purple', 'clean-green'. Default: 'modern-blue'
+        presentation_name: Output name without extension (e.g., "sales-deck")
+        slides: List of slide definitions with custom_code, or None for blank
+        template_name: Optional template presentation name (uses template's aspect ratio)
 
-    Slide Types:
-        - "bullet" or "content": Bullet points (content: list of strings)
-        - "chart": Chart data (content: dict with chart config)
-        - "image": Image (content: image path or dict)
-        - "table": Table (content: dict with headers/rows)
-        - "custom": Execute custom python-pptx code (custom_code: string)
-                    NOTE: Title is auto-set from "title" field. Do NOT add title
-                    textbox in custom_code - only add images, charts, or body content.
+    Format:
+        slides = [{"custom_code": "...python-pptx code..."}]
 
-    Example (blank with default minimal theme):
-        create_presentation("new-deck", outline=None, template_name=None)
+    Slide size:
+        16:9 widescreen (13.333" x 7.5") - standard for modern presentations.
+        If template_name is provided, the template's aspect ratio is used instead.
 
-    Example (blank with specific theme):
-        create_presentation("new-deck", outline=None, template_name=None, theme="vibrant-orange")
-
-    Example (with user template):
-        create_presentation("new-deck", outline={...}, template_name="company-theme")
-
-    Example (bullet points with minimal theme):
-        outline = {
-            "title": "Q4 Results",
-            "subtitle": "Financial Overview",
-            "slides": [
-                {
-                    "title": "Summary",
-                    "type": "bullet",
-                    "content": ["Revenue: $1M", "Profit: $200K", "Growth: 25%"]
-                }
-            ]
-        }
-        create_presentation("q4-results", outline=outline, template_name=None, theme="minimal")
-
-    Example (custom code with matplotlib):
-        outline = {
-            "title": "Data Analysis",
-            "slides": [
-                {
-                    "title": "Revenue Trend",
-                    "type": "custom",
-                    "custom_code": '''
-import matplotlib.pyplot as plt
-
-# Generate chart
-plt.figure(figsize=(10, 6))
-plt.bar(['Q1', 'Q2', 'Q3', 'Q4'], [100, 120, 140, 160])
-plt.title('Quarterly Revenue')
-plt.ylabel('Revenue ($K)')
-plt.savefig('revenue.png', dpi=150)
-plt.close()
-
-# Add to slide
-slide.shapes.add_picture('revenue.png', Inches(1), Inches(2), width=Inches(8))
-                    '''
-                },
-                {
-                    "title": "Key Metrics",
-                    "type": "custom",
-                    "custom_code": '''
-# Create chart
-chart_data = CategoryChartData()
-chart_data.categories = ['Jan', 'Feb', 'Mar']
-chart_data.add_series('Sales', (100, 120, 140))
-
-chart = slide.shapes.add_chart(
-    XL_CHART_TYPE.COLUMN_CLUSTERED,
-    Inches(2), Inches(2), Inches(6), Inches(4),
-    chart_data
-)
-                    '''
-                }
-            ]
-        }
-        create_presentation("data-analysis", outline=outline, template_name=None)
+    Available in custom_code:
+        prs, slide, slide_width, slide_height, Inches, Pt, RGBColor, PP_ALIGN, MSO_SHAPE
     """
     try:
         logger.info("=== create_presentation called ===")
-        logger.info(f"Name: {presentation_name}, Has outline: {outline is not None}")
+        logger.info(f"Name: {presentation_name}, Has slides: {slides is not None}")
 
-        # Parse outline if it's a JSON string (LLM sometimes sends JSON as string)
-        if isinstance(outline, str):
+        # Parse slides if it's a JSON string (LLM sometimes sends JSON as string)
+        if isinstance(slides, str):
             import json
             import re
 
-            logger.info(f"Received outline as string, length: {len(outline)}")
-            logger.debug(f"Outline string (first 500 chars): {outline[:500]}")
+            logger.info(f"Received slides as string, length: {len(slides)}")
+            logger.debug(f"Slides string (first 500 chars): {slides[:500]}")
 
             try:
                 # Try standard JSON parsing first
-                outline = json.loads(outline)
-                logger.info("Successfully parsed outline from JSON string")
+                slides = json.loads(slides)
+                logger.info("Successfully parsed slides from JSON string")
             except json.JSONDecodeError as e:
                 # Try fixing common JSON issues
                 logger.warning(f"Initial JSON parse failed: {str(e)}, attempting fixes...")
 
                 try:
                     # Remove trailing commas before ] or }
-                    fixed_json = re.sub(r',(\s*[}\]])', r'\1', outline)
+                    fixed_json = re.sub(r',(\s*[}\]])', r'\1', slides)
 
                     # Remove comments (// style)
                     fixed_json = re.sub(r'//.*?$', '', fixed_json, flags=re.MULTILINE)
 
                     # Try parsing again
-                    outline = json.loads(fixed_json)
-                    logger.info("Successfully parsed outline after fixing JSON issues")
+                    slides = json.loads(fixed_json)
+                    logger.info("Successfully parsed slides after fixing JSON issues")
                 except json.JSONDecodeError as e2:
                     # Log the problematic JSON for debugging
                     logger.error(f"JSON parse failed even after fixes. Error: {str(e2)}")
-                    logger.error(f"Problematic JSON snippet around error position: {outline[max(0, e2.pos-50):min(len(outline), e2.pos+50)]}")
+                    logger.error(f"Problematic JSON snippet around error position: {slides[max(0, e2.pos-50):min(len(slides), e2.pos+50)]}")
 
                     return {
                         "content": [{
-                            "text": f"**Invalid JSON format for outline**\n\nError: {str(e2)}\n\n**Position**: Line {e2.lineno}, Column {e2.colno}\n\n**Hint**: Check for trailing commas, unescaped quotes, or invalid characters around the error position.\n\nPlease provide a valid JSON object."
+                            "text": f"**Invalid JSON format for slides**\n\nError: {str(e2)}\n\n**Position**: Line {e2.lineno}, Column {e2.colno}\n\n**Hint**: Check for trailing commas, unescaped quotes, or invalid characters around the error position.\n\nPlease provide a valid JSON array."
                         }],
                         "status": "error"
                     }
@@ -2088,7 +1700,7 @@ chart = slide.shapes.add_chart(
         code_interpreter.start(identifier=code_interpreter_id)
 
         try:
-            # Load template if specified, or use default theme
+            # Load template if specified
             # Handle "null", "None", "undefined" strings as None
             if template_name and template_name not in ['null', 'None', 'undefined', '']:
                 # User specified template
@@ -2106,43 +1718,36 @@ chart = slide.shapes.add_chart(
                         "status": "error"
                     }
             else:
-                # No user template specified, use built-in theme
                 template_filename = None
+                logger.info("Creating presentation from scratch")
 
-                # Determine which built-in theme to apply
-                if not theme:
-                    theme = 'minimal'  # Default to minimal theme
-
-                logger.info(f"Using built-in theme: {theme}")
-
-            # Upload ppt_helpers
+            # Upload ppt_helpers (for utility functions)
             _upload_ppt_helpers_to_ci(code_interpreter)
 
-            # Upload workspace images if outline includes images
-            if outline and outline.get('slides'):
-                ppt_manager.load_workspace_images_to_ci(code_interpreter)
+            # Upload workspace images
+            ppt_manager.load_workspace_images_to_ci(code_interpreter)
 
             # Generate creation code
             import json
 
-            if outline:
-                # Save outline to JSON file for safe transfer to Code Interpreter
-                outline_json = json.dumps(outline, ensure_ascii=False, indent=2)
-                outline_filename = f"outline_{presentation_name}.json"
+            if slides:
+                # Save slides to JSON file for safe transfer to Code Interpreter
+                slides_json = json.dumps(slides, ensure_ascii=False, indent=2)
+                slides_filename = f"slides_{presentation_name}.json"
 
-                # Upload outline JSON file to Code Interpreter
-                outline_upload_code = f"""
+                # Upload slides JSON file to Code Interpreter
+                slides_upload_code = f"""
 import json
 
-# Save outline to file
-outline_data = {repr(outline_json)}
-with open('{outline_filename}', 'w', encoding='utf-8') as f:
-    f.write(outline_data)
+# Save slides to file
+slides_data = {repr(slides_json)}
+with open('{slides_filename}', 'w', encoding='utf-8') as f:
+    f.write(slides_data)
 
-print(f"Outline file saved: {outline_filename}")
+print(f"Slides file saved: {slides_filename}")
 """
                 response = code_interpreter.invoke("executeCode", {
-                    "code": outline_upload_code,
+                    "code": slides_upload_code,
                     "language": "python",
                     "clearContext": False
                 })
@@ -2152,60 +1757,75 @@ print(f"Outline file saved: {outline_filename}")
                     result = event.get("result", {})
                     if result.get("isError", False):
                         error_msg = result.get("structuredContent", {}).get("stderr", "Unknown error")
-                        logger.error(f"Failed to upload outline: {error_msg[:200]}")
+                        logger.error(f"Failed to upload slides: {error_msg[:200]}")
                         code_interpreter.stop()
                         return {
-                            "content": [{"text": f"**Failed to prepare outline**: {error_msg[:500]}"}],
+                            "content": [{"text": f"**Failed to prepare slides**: {error_msg[:500]}"}],
                             "status": "error"
                         }
 
-                # Create from outline using file
+                # Create presentation with custom_code for each slide
                 code = f"""
 from pptx import Presentation
-from ppt_helpers import generate_ppt_structure
+from pptx.util import Inches, Pt, Emu
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.chart import XL_CHART_TYPE
+from pptx.chart.data import CategoryChartData
 import json
 
 # Load template or create blank
 prs = Presentation({f"'{template_filename}'" if template_filename else ""})
 
-# Load outline from file
-with open('{outline_filename}', 'r', encoding='utf-8') as f:
-    outline = json.load(f)
+# Set 16:9 aspect ratio (only for new presentations without template)
+if not {f"'{template_filename}'" if template_filename else "None"}:
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
 
-# Generate from outline with theme
-generate_ppt_structure(prs, outline, theme_name={f"'{theme}'" if theme and not template_filename else "None"})
+slide_width = prs.slide_width
+slide_height = prs.slide_height
+
+# Load slides from file
+with open('{slides_filename}', 'r', encoding='utf-8') as f:
+    slides_data = json.load(f)
+
+# Create each slide with custom_code
+for i, slide_def in enumerate(slides_data):
+    slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank layout
+
+    custom_code = slide_def.get('custom_code', '')
+    if custom_code:
+        exec(custom_code)
+        print(f"Slide {{i+1}}: created")
+    else:
+        print(f"Slide {{i+1}}: empty (no custom_code)")
 
 # Save
 prs.save('{presentation_filename}')
 
-print(f"Created presentation with {{len(prs.slides)}} slides")
+print(f"\\nCreated presentation with {{len(prs.slides)}} slides")
 """.strip()
             else:
-                # Create blank presentation
-                theme_code = ""
-                if theme and not template_filename:
-                    theme_code = f"""
-# Apply theme to title slide
-from ppt_helpers import BUILTIN_THEMES, _apply_theme_to_slide_shapes
-theme = BUILTIN_THEMES.get('{theme}', BUILTIN_THEMES['minimal'])
-_apply_theme_to_slide_shapes(slide, theme)
-"""
-
+                # Create blank presentation with single slide
                 code = f"""
 from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
 
-# Create blank presentation (title slide only)
+# Create blank presentation
 prs = Presentation({f"'{template_filename}'" if template_filename else ""})
 
-# Add title slide if completely blank
+# Set 16:9 aspect ratio (only for new presentations without template)
+if not {f"'{template_filename}'" if template_filename else "None"}:
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+
+# Add blank slide if completely empty
 if len(prs.slides) == 0:
-    title_slide_layout = prs.slide_layouts[0]
-    slide = prs.slides.add_slide(title_slide_layout)
-    title = slide.shapes.title
-    subtitle = slide.placeholders[1]
-    title.text = "New Presentation"
-    subtitle.text = "Created with AgentCore"
-{theme_code}
+    blank_layout = prs.slide_layouts[6]  # Blank layout
+    slide = prs.slides.add_slide(blank_layout)
+
 # Save
 prs.save('{presentation_filename}')
 
@@ -2250,40 +1870,29 @@ print(f"Created blank presentation with {{len(prs.slides)}} slide(s)")
             other_files_count = len([d for d in documents if d['filename'] != presentation_filename])
 
             # Success message
-            theme_display = None
-            if template_filename:
-                theme_display = template_filename
-            elif theme:
-                theme_display = f"Built-in theme: {theme}"
-            else:
-                theme_display = "Default"
-
-            if outline:
-                slide_count = len(outline.get('slides', [])) + 1  # +1 for title slide
-                success_msg = f"""**Presentation created from outline!**
+            if slides:
+                slide_count = len(slides)
+                success_msg = f"""**Presentation created!**
 
 **Filename:** {presentation_filename}
-**Title:** {outline.get('title', 'Untitled')}
 **Slides:** {slide_count}
-**Theme:** {theme_display}
+**Template:** {template_filename or 'None (custom design)'}
 **Size:** {s3_info['size_kb']}
 **Other files in workspace:** {other_files_count} presentation{'s' if other_files_count != 1 else ''}
 
 **Next steps:**
-- Use `analyze_presentation` to view structure
+- Use `preview_presentation_slides` to check appearance
 - Use `update_slide_content` to refine content
 """
             else:
                 success_msg = f"""**Blank presentation created!**
 
 **Filename:** {presentation_filename}
-**Theme:** {theme_display}
 **Size:** {s3_info['size_kb']}
 **Other files in workspace:** {other_files_count} presentation{'s' if other_files_count != 1 else ''}
 
 **Next steps:**
-- Use `add_slide` to add more slides
-- Use `update_slide_content` to add content
+- Use `add_slide` to add more slides with custom_code
 """
 
             code_interpreter.stop()
@@ -2292,7 +1901,7 @@ print(f"Created blank presentation with {{len(prs.slides)}} slide(s)")
                 "status": "success",
                 "metadata": {
                     "filename": presentation_filename,
-                    "has_outline": outline is not None,
+                    "slide_count": len(slides) if slides else 1,
                     "template": template_filename,
                     "size_kb": s3_info['size_kb'],
                     "s3_key": s3_info['s3_key'],

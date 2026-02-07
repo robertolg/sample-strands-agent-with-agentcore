@@ -1308,6 +1308,15 @@ export const useStreamEvents = ({
       case 'error':
         handleErrorEvent(event)
         break
+      case 'warning':
+        // Show warning as a bot message without stopping the stream
+        setMessages(prev => [...prev, {
+          id: `warning_${Date.now()}`,
+          text: `⚠️ ${event.message}`,
+          sender: 'bot',
+          timestamp: new Date().toISOString()
+        }])
+        break
       case 'interrupt':
         handleInterruptEvent(event)
         break

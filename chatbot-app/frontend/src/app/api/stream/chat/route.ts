@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
 
     let message: string
     let model_id: string | undefined
+    let temperature: number | undefined
     let enabled_tools: string[] | undefined
     let files: File[] | undefined
     let request_type: string | undefined
@@ -34,6 +35,10 @@ export async function POST(request: NextRequest) {
       const formData = await request.formData()
       message = formData.get('message') as string
       model_id = formData.get('model_id') as string | undefined
+      const temperatureStr = formData.get('temperature') as string | null
+      if (temperatureStr) {
+        temperature = parseFloat(temperatureStr)
+      }
 
       const enabledToolsJson = formData.get('enabled_tools') as string | null
       if (enabledToolsJson) {
@@ -69,6 +74,7 @@ export async function POST(request: NextRequest) {
       const body = await request.json()
       message = body.message
       model_id = body.model_id
+      temperature = body.temperature
       enabled_tools = body.enabled_tools
       request_type = body.request_type
       selected_artifact_id = body.selected_artifact_id
@@ -85,6 +91,11 @@ export async function POST(request: NextRequest) {
     // Extract user from Cognito JWT token in Authorization header
     const user = extractUserFromRequest(request)
     const userId = user.userId
+
+    // Extract raw JWT token for forwarding to MCP Runtime (3LO OAuth user identity)
+    const authHeader = request.headers.get('authorization') || ''
+    const authToken = authHeader.startsWith('Bearer ') ? authHeader : ''
+    console.log(`[BFF] Authorization header present: ${!!authHeader}, starts with Bearer: ${authHeader.startsWith('Bearer ')}, authToken length: ${authToken.length}`)
 
     // Get or generate session ID (user-specific)
     const { sessionId } = getSessionId(request, userId)
@@ -141,56 +152,61 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Load model configuration from storage
+    // Load model configuration from storage (only if not provided in request)
     const defaultModelId = model_id || 'us.anthropic.claude-haiku-4-5-20251001-v1:0'
 
     let modelConfig = {
       model_id: defaultModelId,
-      temperature: 0.7,
+      temperature: temperature ?? 0.7,
       system_prompt: getSystemPrompt(),
       caching_enabled: defaultModelId.toLowerCase().includes('claude')
     }
 
-    // Load model configuration for all users (including anonymous in local mode)
-    if (IS_LOCAL) {
-      try {
-        const { getUserModelConfig } = await import('@/lib/local-tool-store')
-        const config = getUserModelConfig(userId)
-        console.log(`[BFF] Loaded model config for ${userId}:`, config)
-        if (config) {
-          // Update model and temperature
-          if (config.model_id) {
-            modelConfig.model_id = config.model_id
-            modelConfig.caching_enabled = config.model_id.toLowerCase().includes('claude')
-            console.log(`[BFF] Applied model_id: ${config.model_id}, caching: ${modelConfig.caching_enabled}`)
+    // Only load global profile config if model_id was NOT provided in the request
+    // When the frontend sends model_id/temperature, they represent per-session state
+    if (!model_id) {
+      if (IS_LOCAL) {
+        try {
+          const { getUserModelConfig } = await import('@/lib/local-tool-store')
+          const config = getUserModelConfig(userId)
+          console.log(`[BFF] Loaded model config for ${userId}:`, config)
+          if (config) {
+            // Update model and temperature
+            if (config.model_id) {
+              modelConfig.model_id = config.model_id
+              modelConfig.caching_enabled = config.model_id.toLowerCase().includes('claude')
+              console.log(`[BFF] Applied model_id: ${config.model_id}, caching: ${modelConfig.caching_enabled}`)
+            }
+            if (config.temperature !== undefined) {
+              modelConfig.temperature = config.temperature
+            }
+          } else {
+            console.log(`[BFF] No saved config found for ${userId}, using defaults`)
           }
-          if (config.temperature !== undefined) {
-            modelConfig.temperature = config.temperature
-          }
-        } else {
-          console.log(`[BFF] No saved config found for ${userId}, using defaults`)
+        } catch (error) {
+          console.error(`[BFF] Error loading config for ${userId}:`, error)
+          // Use defaults
         }
-      } catch (error) {
-        console.error(`[BFF] Error loading config for ${userId}:`, error)
-        // Use defaults
+      } else {
+        // DynamoDB for all users (including anonymous)
+        try {
+          const { getUserProfile } = await import('@/lib/dynamodb-client')
+          const profile = await getUserProfile(userId)
+          if (profile?.preferences) {
+            if (profile.preferences.defaultModel) {
+              modelConfig.model_id = profile.preferences.defaultModel
+              modelConfig.caching_enabled = profile.preferences.defaultModel.toLowerCase().includes('claude')
+            }
+            if (profile.preferences.defaultTemperature !== undefined) {
+              modelConfig.temperature = profile.preferences.defaultTemperature
+            }
+          }
+        } catch (error) {
+          // Use defaults
+        }
       }
     } else {
-      // DynamoDB for all users (including anonymous)
-      try {
-        const { getUserProfile } = await import('@/lib/dynamodb-client')
-        const profile = await getUserProfile(userId)
-        if (profile?.preferences) {
-          if (profile.preferences.defaultModel) {
-            modelConfig.model_id = profile.preferences.defaultModel
-            modelConfig.caching_enabled = profile.preferences.defaultModel.toLowerCase().includes('claude')
-          }
-          if (profile.preferences.defaultTemperature !== undefined) {
-            modelConfig.temperature = profile.preferences.defaultTemperature
-          }
-        }
-      } catch (error) {
-        // Use defaults
-      }
+      console.log(`[BFF] Using request-provided model_id: ${model_id}, temperature: ${temperature}`)
     }
 
     // Use default system prompt (prompt selection feature removed)
@@ -350,7 +366,8 @@ export async function POST(request: NextRequest) {
             agentCoreAbortController.signal, // Pass abort signal for cancellation
             request_type, // Request type: normal, swarm, compose
             selected_artifact_id, // Selected artifact ID for tool context
-            userApiKeys // User API keys for tool authentication
+            userApiKeys, // User API keys for tool authentication
+            authToken // Cognito JWT for MCP Runtime 3LO OAuth
           )
           agentStarted = true
 

@@ -27,6 +27,7 @@ def create_agent(
     caching_enabled: Optional[bool] = None,
     compaction_enabled: Optional[bool] = None,
     api_keys: Optional[dict] = None,
+    auth_token: Optional[str] = None,
     **kwargs
 ) -> BaseAgent:
     """
@@ -84,6 +85,7 @@ def create_agent(
             compaction_enabled=compaction_enabled,
             use_null_conversation_manager=kwargs.get("use_null_conversation_manager"),
             api_keys=api_keys,
+            auth_token=auth_token,
         )
 
     elif request_type == "swarm":

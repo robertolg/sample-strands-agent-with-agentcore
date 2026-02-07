@@ -128,6 +128,7 @@ export function ChatInterface() {
   const addArtifactRef = useRef<typeof addArtifact | null>(null)
   const openCanvasRef = useRef<(() => void) | null>(null)
   const setBrowserArtifactIdRef = useRef<typeof setBrowserArtifactId | null>(null)
+  const reloadFromStorageRef = useRef<(() => void) | null>(null)
 
   // Handler for browser session detection - creates artifact and opens Canvas
   const handleBrowserSessionDetected = useCallback((browserSessionId: string, browserId: string) => {
@@ -211,6 +212,8 @@ export function ChatInterface() {
     setVoiceStatus,
     finalizeVoiceMessage,
     addArtifactMessage,
+    currentModelId,
+    updateModelConfig,
   } = useChat({
     onArtifactUpdated: handleArtifactUpdated,
     onWordDocumentsCreated: handleWordDocumentsCreated,
@@ -218,6 +221,7 @@ export function ChatInterface() {
     onPptDocumentsCreated: handlePptDocumentsCreated,
     onBrowserSessionDetected: handleBrowserSessionDetected,
     onExtractedDataCreated: handleExtractedDataCreated,
+    onSessionLoaded: () => reloadFromStorageRef.current?.(),
   })
 
   // Calculate tool counts considering nested tools in dynamic groups (excluding Research Agent)
@@ -285,8 +289,14 @@ export function ChatInterface() {
     addArtifact,
     removeArtifact,
     refreshArtifacts,
+    reloadFromStorage,
     justUpdated: artifactJustUpdated,
   } = useArtifacts(groupedMessages, sessionId)
+
+  // Keep reloadFromStorage ref in sync for the onSessionLoaded callback
+  useEffect(() => {
+    reloadFromStorageRef.current = reloadFromStorage
+  }, [reloadFromStorage])
 
   // Connect artifact methods to canvas handlers (to avoid circular dependency with useChat)
   useEffect(() => {
@@ -1426,6 +1436,8 @@ If the user asks to modify this document, use the update_artifact tool to find a
             isComposing: composer.isComposing,
             showOutlineConfirm: composer.showOutlineConfirm,
           }}
+          currentModelId={currentModelId}
+          onModelChange={updateModelConfig}
           onSendMessage={handleSendMessage}
           onStopGeneration={stopGeneration}
           onToggleTool={handleToggleTool}
@@ -1452,9 +1464,9 @@ If the user asks to modify this document, use the update_artifact tool to find a
         />
       )}
 
-      {/* Interrupt Approval Modal - only for browser (research handled via Canvas) */}
+      {/* Interrupt Approval Modal - for email deletion (research handled via Canvas) */}
       {currentInterrupt && currentInterrupt.interrupts.length > 0 &&
-       currentInterrupt.interrupts[0].name !== "chatbot-research-approval" && (
+       currentInterrupt.interrupts[0].name === "chatbot-email-delete-approval" && (
         <InterruptApprovalModal
           isOpen={true}
           onApprove={handleApproveInterrupt}

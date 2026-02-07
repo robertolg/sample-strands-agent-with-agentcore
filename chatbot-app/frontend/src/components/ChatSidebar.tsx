@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Menu, Plus, Trash2, Moon, Sun, Settings, KeyRound, Github, ChevronRight } from 'lucide-react';
+import { Menu, Plus, Trash2, Moon, Sun, Settings, KeyRound, Github, ChevronRight, LogOut } from 'lucide-react';
 import { SettingsDialog } from './settings/SettingsDialog';
 import { Button } from '@/components/ui/button';
 import {
@@ -48,11 +48,25 @@ export function ChatSidebar({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
+  const [showSignOut, setShowSignOut] = useState(false);
 
   // Prevent hydration mismatch by only rendering theme-dependent UI after mount
   useEffect(() => {
     setIsMounted(true);
+    // Show sign-out only when Cognito is configured and not local dev
+    const hasCognito = !!(process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID && process.env.NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID);
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    setShowSignOut(hasCognito && !isLocal);
   }, []);
+
+  const handleSignOut = async () => {
+    try {
+      const { signOut } = await import('aws-amplify/auth');
+      await signOut();
+    } catch (error) {
+      console.error('Sign out failed:', error);
+    }
+  };
 
   // Use custom hooks
   const { chatSessions, isLoadingSessions, deleteSession, deleteAllSessions } = useChatSessions({
@@ -176,6 +190,18 @@ export function ChatSidebar({
               <Github className="h-4 w-4 text-muted-foreground" />
               <span>GitHub</span>
             </a>
+            {showSignOut && (
+              <>
+                <div className="my-1 border-t border-border" />
+                <button
+                  onClick={handleSignOut}
+                  className="w-full flex items-center gap-3 px-3 py-2 text-sm rounded-md hover:bg-destructive/10 text-destructive transition-colors"
+                >
+                  <LogOut className="h-4 w-4" />
+                  <span>Sign out</span>
+                </button>
+              </>
+            )}
           </PopoverContent>
         </Popover>
       </div>

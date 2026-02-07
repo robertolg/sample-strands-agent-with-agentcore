@@ -20,6 +20,7 @@ interface UseChatProps {
   onPptDocumentsCreated?: (documents: WorkspaceDocument[]) => void  // Callback when PowerPoint documents are created
   onBrowserSessionDetected?: (browserSessionId: string, browserId: string) => void  // Callback when browser session is first detected
   onExtractedDataCreated?: (data: ExtractedDataInfo) => void  // Callback when browser_extract creates artifact
+  onSessionLoaded?: () => void  // Callback when session load completes (artifacts ready in sessionStorage)
 }
 
 interface UseChatReturn {
@@ -52,6 +53,10 @@ interface UseChatReturn {
   researchProgress?: { stepNumber: number; content: string }
   respondToInterrupt: (interruptId: string, response: string) => Promise<void>
   currentInterrupt: InterruptState | null
+  // Per-session model state
+  currentModelId: string
+  currentTemperature: number
+  updateModelConfig: (modelId: string, temperature?: number) => void
   // Swarm mode (Multi-Agent)
   swarmEnabled: boolean
   toggleSwarm: (enabled: boolean) => void
@@ -88,6 +93,17 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
   const [gatewayToolIds, setGatewayToolIds] = useState<string[]>([])
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [swarmEnabled, setSwarmEnabled] = useState(false)
+
+  // Per-session model/temperature state (not written to global profile on session switch)
+  const [currentModelId, setCurrentModelId] = useState(DEFAULT_PREFERENCES.lastModel!)
+  const [currentTemperature, setCurrentTemperature] = useState(DEFAULT_PREFERENCES.lastTemperature!)
+
+  // Ref to hold session-specific enabled tools for re-application after loadTools
+  const sessionEnabledToolsRef = useRef<string[] | null>(null)
+
+  // Ref for onSessionLoaded callback to avoid stale closure in useCallback
+  const onSessionLoadedRef = useRef(props?.onSessionLoaded)
+  onSessionLoadedRef.current = props?.onSessionLoaded
 
   const [sessionState, setSessionState] = useState<ChatSessionState>({
     reasoning: null,
@@ -218,7 +234,9 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     gatewayToolIds,
     sessionId,
     setSessionId,
-    onSessionCreated: handleSessionCreated
+    onSessionCreated: handleSessionCreated,
+    currentModelId,
+    currentTemperature
   })
 
   // Initialize polling with apiLoadSession (now available)
@@ -332,44 +350,62 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
 
     console.log(`[useChat] ${preferences ? 'Restoring session' : 'Using default'} preferences:`, effectivePreferences)
 
-    // Restore tool states
+    // Restore tool states (including nested tools in dynamic groups)
     const enabledTools = effectivePreferences.enabledTools || []
-    setAvailableTools(prevTools => prevTools.map(tool => ({
-      ...tool,
-      enabled: enabledTools.includes(tool.id)
-    })))
+    setAvailableTools(prevTools => prevTools.map(tool => {
+      const updated: any = { ...tool, enabled: enabledTools.includes(tool.id) }
+      if ((tool as any).isDynamic && (tool as any).tools) {
+        updated.tools = (tool as any).tools.map((nt: any) => ({
+          ...nt,
+          enabled: enabledTools.includes(nt.id)
+        }))
+      }
+      return updated
+    }))
+    // Save enabled tools ref so loadTools re-application can restore them
+    sessionEnabledToolsRef.current = enabledTools
     console.log(`[useChat] Tool states updated: ${enabledTools.length} enabled`)
 
-    // Restore model configuration
-    try {
-      await apiPost('model/config/update', {
-        model_id: effectivePreferences.lastModel,
-        temperature: effectivePreferences.lastTemperature,
-      }, {
-        headers: newSessionId ? { 'X-Session-ID': newSessionId } : {},
-      })
-      console.log(`[useChat] Model config updated: ${effectivePreferences.lastModel}, temp=${effectivePreferences.lastTemperature}`)
-    } catch (error) {
-      console.warn('[useChat] Failed to update model config:', error)
-    }
+    // Restore model configuration via React state only (no global profile mutation)
+    setCurrentModelId(effectivePreferences.lastModel!)
+    setCurrentTemperature(effectivePreferences.lastTemperature!)
+    console.log(`[useChat] Model state updated: ${effectivePreferences.lastModel}, temp=${effectivePreferences.lastTemperature}`)
 
     // Restore swarm mode preference from sessionStorage
     const savedSwarmEnabled = sessionStorage.getItem(`swarm-enabled-${newSessionId}`)
     const swarmRestored = savedSwarmEnabled === 'true'
     setSwarmEnabled(swarmRestored)
     console.log(`[useChat] Swarm mode restored: ${swarmRestored}`)
+
+    // Notify that session loading is complete (artifacts are in sessionStorage)
+    onSessionLoadedRef.current?.()
   }, [apiLoadSession, setAvailableTools, setUIState, setSessionState, stopPolling, checkAndStartPollingForA2ATools])
 
   // ==================== INITIALIZATION EFFECTS ====================
-  // Load tools when backend is ready
+  // Load tools when backend is ready, then re-apply session tool states if needed
   useEffect(() => {
     if (uiState.isConnected) {
       const timeoutId = setTimeout(async () => {
         await loadTools()
+        // Re-apply session-specific tool enabled states after loadTools overwrites them
+        const savedEnabledTools = sessionEnabledToolsRef.current
+        if (savedEnabledTools) {
+          setAvailableTools(prevTools => prevTools.map(tool => {
+            const updated: any = { ...tool, enabled: savedEnabledTools.includes(tool.id) }
+            if ((tool as any).isDynamic && (tool as any).tools) {
+              updated.tools = (tool as any).tools.map((nt: any) => ({
+                ...nt,
+                enabled: savedEnabledTools.includes(nt.id)
+              }))
+            }
+            return updated
+          }))
+          console.log(`[useChat] Re-applied session tool states after loadTools: ${savedEnabledTools.length} enabled`)
+        }
       }, 1000)
       return () => clearTimeout(timeoutId)
     }
-  }, [uiState.isConnected, loadTools])
+  }, [uiState.isConnected, loadTools, setAvailableTools])
 
   // Restore last session on page load
   useEffect(() => {
@@ -471,11 +507,14 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
       })
       setUIState(prev => ({ ...prev, isTyping: false, agentStatus: 'idle' }))
       setMessages([])
+      // Keep current tool and model selections for new session (inherit from previous)
+      setSwarmEnabled(false)
+      sessionEnabledToolsRef.current = null
       if (oldSessionId) {
         sessionStorage.removeItem(`browser-session-${oldSessionId}`)
       }
     }
-  }, [apiNewChat, sessionId, stopPolling])
+  }, [apiNewChat, sessionId, stopPolling, setAvailableTools])
 
   const respondToInterrupt = useCallback(async (interruptId: string, response: string) => {
     if (!sessionState.interrupt) return
@@ -630,6 +669,23 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
 
     return grouped
   }, [messages])
+
+  // Update per-session model config (React state + global default via API)
+  const updateModelConfig = useCallback((modelId: string, temperature?: number) => {
+    setCurrentModelId(modelId)
+    if (temperature !== undefined) {
+      setCurrentTemperature(temperature)
+    }
+    // Also persist as global default for new chats
+    apiPost('model/config/update', {
+      model_id: modelId,
+      ...(temperature !== undefined && { temperature }),
+    }, {
+      headers: sessionId ? { 'X-Session-ID': sessionId } : {},
+    }).catch(error => {
+      console.warn('[useChat] Failed to update global model config:', error)
+    })
+  }, [sessionId])
 
   const toggleProgressPanel = useCallback(() => {
     setUIState(prev => ({ ...prev, showProgressPanel: !prev.showProgressPanel }))
@@ -870,6 +926,10 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     researchProgress: sessionState.researchProgress,
     respondToInterrupt,
     currentInterrupt: sessionState.interrupt,
+    // Per-session model state
+    currentModelId,
+    currentTemperature,
+    updateModelConfig,
     // Swarm mode (Multi-Agent)
     swarmEnabled,
     toggleSwarm,

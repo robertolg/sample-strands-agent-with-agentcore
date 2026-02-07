@@ -70,6 +70,7 @@ class VoiceAgent(BaseAgent):
         user_id: Optional[str] = None,
         enabled_tools: Optional[List[str]] = None,
         system_prompt: Optional[str] = None,
+        auth_token: Optional[str] = None,
     ):
         """
         Initialize voice agent with BidiAgent
@@ -79,6 +80,7 @@ class VoiceAgent(BaseAgent):
             user_id: User identifier (defaults to session_id)
             enabled_tools: List of tool IDs to enable
             system_prompt: Optional system prompt override
+            auth_token: Cognito JWT for MCP Runtime 3LO authentication
         """
         # Initialize base agent (handles session_id, user_id, enabled_tools, gateway_client, tools, session_manager)
         super().__init__(
@@ -89,6 +91,7 @@ class VoiceAgent(BaseAgent):
             system_prompt=system_prompt,
             caching_enabled=False,  # Voice mode doesn't use prompt caching
             compaction_enabled=False,  # Voice mode doesn't use compaction
+            auth_token=auth_token,  # For MCP Runtime 3LO tools (Gmail, etc.)
         )
 
         logger.info(f"[VoiceAgent] Initialized with enabled_tools: {self.enabled_tools}")

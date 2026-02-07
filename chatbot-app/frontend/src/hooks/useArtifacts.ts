@@ -260,6 +260,61 @@ export function useArtifacts(
     return []
   }, [sessionId])
 
+  /**
+   * Re-read artifacts from sessionStorage.
+   * Called after loadSession completes to handle the case where
+   * the initial useEffect ran before sessionStorage was populated.
+   */
+  const reloadFromStorage = useCallback(() => {
+    if (!sessionId) return
+
+    const artifactsKey = `artifacts-${sessionId}`
+    const storedArtifacts = sessionStorage.getItem(artifactsKey)
+
+    if (storedArtifacts) {
+      try {
+        const data = JSON.parse(storedArtifacts)
+        if (Array.isArray(data) && data.length > 0) {
+          const backendArtifacts = data.map((item: any) => {
+            let timestamp = item.timestamp || item.created_at
+            if (timestamp) {
+              try {
+                const date = new Date(timestamp)
+                if (!isNaN(date.getTime())) {
+                  timestamp = date.toISOString()
+                } else {
+                  timestamp = new Date().toISOString()
+                }
+              } catch {
+                timestamp = new Date().toISOString()
+              }
+            } else {
+              timestamp = new Date().toISOString()
+            }
+
+            return {
+              id: item.id,
+              type: item.type,
+              title: item.title,
+              content: item.content,
+              description: item.metadata?.description || item.description || '',
+              toolName: item.tool_name,
+              timestamp,
+              sessionId: sessionId,
+              metadata: item.metadata,
+            }
+          })
+
+          setArtifacts(backendArtifacts)
+        }
+      } catch (error) {
+        console.error('[useArtifacts] Failed to reload artifacts from storage:', error)
+      }
+    }
+
+    setLoadedFromBackend(true)
+  }, [sessionId])
+
   return {
     artifacts,
     selectedArtifactId,
@@ -273,6 +328,7 @@ export function useArtifacts(
     removeArtifact,
     updateArtifact,
     refreshArtifacts,
+    reloadFromStorage,
     justUpdated,  // For flash effect on update
   }
 }

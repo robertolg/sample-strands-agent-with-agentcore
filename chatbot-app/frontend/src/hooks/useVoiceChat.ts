@@ -458,7 +458,7 @@ export function useVoiceChat({
       }
 
       const startData = await startResponse.json()
-      const { sessionId: activeSessionId, wsUrl } = startData
+      const { sessionId: activeSessionId, wsUrl, authToken: voiceAuthToken } = startData
 
       // Store active session ID for cleanup
       activeSessionIdRef.current = activeSessionId
@@ -501,8 +501,9 @@ export function useVoiceChat({
           session_id: activeSessionId,
           user_id: userId,
           enabled_tools: enabledTools,
+          auth_token: voiceAuthToken,  // For MCP Runtime 3LO tools (Gmail, etc.)
         }))
-        console.log(`[VoiceChat] Sent config: session=${activeSessionId}, tools=${enabledTools.length}`)
+        console.log(`[VoiceChat] Sent config: session=${activeSessionId}, tools=${enabledTools.length}, authToken=${voiceAuthToken ? 'present' : 'missing'}`)
       }
 
       ws.onmessage = handleMessage

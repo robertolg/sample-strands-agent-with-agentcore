@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react'
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { ChevronRight, Download, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { ToolExecution } from '@/types/chat'
 import { getToolDisplayName } from '@/utils/chat'
@@ -94,6 +94,35 @@ const CollapsibleMarkdown = React.memo<{
 export const ToolExecutionContainer = React.memo<ToolExecutionContainerProps>(({ toolExecutions, compact = false, availableTools = [], sessionId, onOpenResearchArtifact, onOpenWordArtifact, onOpenExcelArtifact, onOpenPptArtifact, onOpenExtractedDataArtifact }) => {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
   const [selectedImage, setSelectedImage] = useState<{ src: string; alt: string } | null>(null)
+
+  // Track which OAuth URLs we've already opened to prevent duplicate popups
+  const openedAuthUrls = useRef<Set<string>>(new Set())
+
+  // Auto-open OAuth authorization popup (e.g., Google 3LO)
+  useEffect(() => {
+    toolExecutions.forEach((toolExecution) => {
+      if (toolExecution.isComplete && toolExecution.toolResult) {
+        // Check for Google authorization pattern
+        const authMatch = toolExecution.toolResult.match(/Google authorization required\. Please visit:\s*(https:\/\/[^\s]+)/)
+        if (authMatch) {
+          const authUrl = authMatch[1]
+          // Only open if we haven't opened this URL before
+          if (!openedAuthUrls.current.has(authUrl)) {
+            openedAuthUrls.current.add(authUrl)
+            // Open OAuth popup
+            const popup = window.open(
+              authUrl,
+              'oauth_popup',
+              'width=500,height=600,scrollbars=yes,resizable=yes'
+            )
+            if (popup) {
+              popup.focus()
+            }
+          }
+        }
+      }
+    })
+  }, [toolExecutions])
 
   // Extract output filename from Word tool result
   // For modify_word_document: extracts the "Saved as" filename (output)

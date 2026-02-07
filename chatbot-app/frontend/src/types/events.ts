@@ -88,6 +88,11 @@ export interface ErrorEvent {
   message: string;
 }
 
+export interface WarningEvent {
+  type: 'warning';
+  message: string;
+}
+
 export interface InterruptEvent {
   type: 'interrupt';
   interrupts: Array<{
@@ -222,6 +227,7 @@ export type StreamEvent =
   | ThinkingEvent
   | CompleteEvent
   | ErrorEvent
+  | WarningEvent
   | InterruptEvent
   | ProgressEvent
   | MetadataEvent
@@ -322,7 +328,7 @@ export const STREAM_EVENT_TYPES = [
   // Tool events
   'tool_use', 'tool_result', 'tool_progress',
   // Lifecycle events
-  'init', 'thinking', 'complete', 'error',
+  'init', 'thinking', 'complete', 'error', 'warning',
   // Special events
   'interrupt', 'progress', 'metadata',
   // Progress events

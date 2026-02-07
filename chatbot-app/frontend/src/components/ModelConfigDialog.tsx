@@ -29,9 +29,11 @@ interface ModelConfigDialogProps {
   onOpenChange?: (open: boolean) => void;
   trigger?: React.ReactNode;
   agentStatus?: AgentStatus;
+  currentModelId?: string;  // Per-session model from useChat state
+  onModelChange?: (modelId: string) => void;  // Callback to update per-session state
 }
 
-export function ModelConfigDialog({ sessionId, trigger, agentStatus }: ModelConfigDialogProps) {
+export function ModelConfigDialog({ sessionId, trigger, agentStatus, currentModelId, onModelChange }: ModelConfigDialogProps) {
   const [loading, setLoading] = useState(false);
   const [currentConfig, setCurrentConfig] = useState<ModelConfig | null>(null);
   const [isOpen, setIsOpen] = useState(false);
@@ -46,12 +48,19 @@ export function ModelConfigDialog({ sessionId, trigger, agentStatus }: ModelConf
     loadData();
   }, []);
 
-  // Update local state when current config changes
+  // Sync selectedModelId from currentModelId prop (per-session state takes priority)
   useEffect(() => {
-    if (currentConfig) {
+    if (currentModelId) {
+      setSelectedModelId(currentModelId);
+    }
+  }, [currentModelId]);
+
+  // Fallback: sync from currentConfig when no prop provided
+  useEffect(() => {
+    if (!currentModelId && currentConfig) {
       setSelectedModelId(currentConfig.model_id);
     }
-  }, [currentConfig]);
+  }, [currentModelId, currentConfig]);
 
   // Clear search when popover closes
   useEffect(() => {
@@ -75,6 +84,13 @@ export function ModelConfigDialog({ sessionId, trigger, agentStatus }: ModelConf
   };
 
   const loadModelConfig = async () => {
+    // If per-session model ID is provided via prop, use it instead of loading from API
+    if (currentModelId) {
+      setCurrentConfig({ model_id: currentModelId });
+      setSelectedModelId(currentModelId);
+      return;
+    }
+
     try {
       const data = await apiGet<{ success: boolean; config: any }>(
         'model/config',
@@ -112,6 +128,14 @@ export function ModelConfigDialog({ sessionId, trigger, agentStatus }: ModelConf
     setSelectedModelId(modelId);
     setIsOpen(false);
 
+    // Update per-session state via callback (this also saves global default)
+    if (onModelChange) {
+      onModelChange(modelId);
+      setCurrentConfig({ model_id: modelId });
+      return;
+    }
+
+    // Fallback: direct API call when no callback provided
     try {
       await apiPost(
         'model/config/update',

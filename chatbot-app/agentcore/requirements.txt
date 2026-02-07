@@ -48,6 +48,7 @@ pillow
 pytz
 retry
 fire
+deprecated
 playwright>=1.54.0,<=1.56.0
 install_playwright>=0.1.0,<1.0.0
 

@@ -917,6 +917,8 @@ async function sendResponse(event, status, data, reason) {
         OTEL_PYTHON_DISTRO: 'aws_distro',
         OTEL_PYTHON_CONFIGURATOR: 'aws_configurator',
         OTEL_LOGS_EXPORTER: 'none',
+        // Build timestamp to force Runtime update on each deployment
+        BUILD_TIMESTAMP: new Date().toISOString(),
       },
 
       tags: {

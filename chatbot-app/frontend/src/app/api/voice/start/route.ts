@@ -103,13 +103,17 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}))
     const enabledTools: string[] = body.enabledTools || []
 
+    // Extract auth token from Authorization header for MCP Runtime 3LO
+    const authHeader = request.headers.get('authorization')
+    const authToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null
+
     // Ensure session exists in storage (creates if not exists)
     const { isNew } = await ensureSessionExists(userId, sessionId, {
       title: 'Voice Chat',
       metadata: { isVoiceSession: true },
     })
 
-    console.log(`[Voice Start] User: ${userId}, Session: ${sessionId}, New: ${isNew}, Tools: ${enabledTools.length}`)
+    console.log(`[Voice Start] User: ${userId}, Session: ${sessionId}, New: ${isNew}, Tools: ${enabledTools.length}, AuthToken: ${authToken ? 'present' : 'missing'}`)
 
     let wsUrl: string
     const awsRegion = process.env.AWS_REGION || 'us-west-2'
@@ -151,6 +155,7 @@ export async function POST(request: NextRequest) {
       wsUrl,
       awsRegion,
       isNewSession: isNew,
+      authToken,  // Pass to frontend for WebSocket config message
     })
   } catch (error) {
     console.error('[Voice Start] Error:', error)

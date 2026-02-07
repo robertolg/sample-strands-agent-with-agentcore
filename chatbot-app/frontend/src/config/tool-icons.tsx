@@ -19,6 +19,7 @@ import {
   SiWikipedia,
   SiArxiv,
   SiGooglemaps,
+  SiGmail,
 } from 'react-icons/si';
 
 /**
@@ -60,6 +61,9 @@ export const toolIconMap: Record<string, IconType> = {
   gateway_show_on_map: SiGooglemaps,
   gateway_weather: TbCloudRain,
   get_current_weather: TbCloudRain,
+
+  // Productivity (MCP)
+  mcp_gmail: SiGmail,
 };
 
 /**

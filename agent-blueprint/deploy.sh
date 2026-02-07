@@ -102,10 +102,11 @@ display_menu() {
     echo ""
     echo "  1) AgentCore Runtime      (Agent container on Bedrock AgentCore)"
     echo "  2) Frontend + BFF         (Next.js + CloudFront + ALB)"
-    echo "  3) MCP Tools              (AgentCore Gateway + Lambda functions)"
-    echo "  4) AgentCore Runtime A2A  (Research Agent, Browser Use Agent)"
-    echo "  5) Runtime + Frontend     (1 + 2 combined)"
-    echo "  6) Full Stack             (All components: Runtime + Frontend + Gateway + A2A)"
+    echo "  3) Runtime + Frontend     (1 + 2 combined)"
+    echo "  4) AgentCore Gateway MCP  (Gateway + Lambda functions)"
+    echo "  5) AgentCore Runtime A2A  (Research Agent, Browser Use Agent)"
+    echo "  6) AgentCore Runtime MCP  (Gmail OAuth via 3LO)"
+    echo "  7) Full Stack             (All components: Runtime + Frontend + Gateway + A2A + 3LO)"
     echo ""
     echo "  0) Exit"
     echo ""
@@ -518,6 +519,31 @@ deploy_browser_use_agent() {
     log_info "Browser Use Agent A2A agent deployment complete!"
 }
 
+# Deploy MCP 3LO Server (Gmail OAuth)
+deploy_mcp_3lo_server() {
+    log_step "Deploying MCP 3LO Server (Gmail OAuth)..."
+    echo ""
+
+    cd agentcore-runtime-mcp-stack
+
+    if [ ! -f "deploy.sh" ]; then
+        log_error "deploy.sh not found in agentcore-runtime-mcp-stack"
+        exit 1
+    fi
+
+    chmod +x deploy.sh
+
+    export AWS_REGION
+    export PROJECT_NAME="strands-agent-chatbot"
+    export ENVIRONMENT="dev"
+
+    ./deploy.sh
+
+    cd ..
+
+    log_info "MCP 3LO Server deployment complete!"
+}
+
 # Deploy all available A2A agents automatically (for Full Stack deployment)
 deploy_all_a2a_agents() {
     log_step "Deploying all available A2A agents..."
@@ -609,6 +635,13 @@ display_deployment_summary() {
         --output text \
         --region $AWS_REGION 2>/dev/null || echo "Not deployed")
 
+    # Get MCP 3LO Runtime ARN
+    MCP_3LO_ARN=$(aws ssm get-parameter \
+        --name "/strands-agent-chatbot/dev/mcp/mcp-3lo-runtime-arn" \
+        --query 'Parameter.Value' \
+        --output text \
+        --region $AWS_REGION 2>/dev/null || echo "Not deployed")
+
     log_info "Deployment Region: $AWS_REGION"
     echo ""
 
@@ -669,6 +702,16 @@ display_deployment_summary() {
         echo ""
     fi
 
+    if [ "$MCP_3LO_ARN" != "Not deployed" ]; then
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🔑 MCP 3LO SERVER"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "MCP 3LO Runtime:     $MCP_3LO_ARN"
+        echo "Tools:               search_emails, read_email"
+        echo ""
+    fi
+
     echo "========================================"
     echo "✅ All components deployed successfully!"
     echo "========================================"
@@ -684,7 +727,7 @@ main() {
     select_region
     display_menu
 
-    read -p "Select option (0-6): " OPTION
+    read -p "Select option (0-7): " OPTION
     echo ""
 
     case $OPTION in
@@ -704,23 +747,7 @@ main() {
             ;;
         3)
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "  Option 3: MCP Tools Only"
-            echo "  (AgentCore Gateway + Lambda)"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ""
-            deploy_mcp_servers
-            ;;
-        4)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "  Option 4: AgentCore Runtime A2A"
-            echo "  (Research Agent, Browser Use Agent)"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ""
-            deploy_agentcore_runtime_a2a
-            ;;
-        5)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "  Option 5: Runtime + Frontend"
+            echo "  Option 3: Runtime + Frontend"
             echo "  (AgentCore + BFF/Frontend)"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
@@ -730,10 +757,34 @@ main() {
             echo ""
             deploy_frontend
             ;;
+        4)
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  Option 4: AgentCore Gateway MCP"
+            echo "  (Gateway + Lambda functions)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            deploy_mcp_servers
+            ;;
+        5)
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  Option 5: AgentCore Runtime A2A"
+            echo "  (Research Agent, Browser Use Agent)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            deploy_agentcore_runtime_a2a
+            ;;
         6)
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "  Option 6: Full Stack"
-            echo "  (Runtime + Frontend + Gateway + A2A)"
+            echo "  Option 6: AgentCore Runtime MCP"
+            echo "  (Gmail OAuth via 3LO)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            deploy_mcp_3lo_server
+            ;;
+        7)
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  Option 7: Full Stack"
+            echo "  (Runtime + Frontend + Gateway + A2A + 3LO)"
             echo "  Cognito authentication will be enabled"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
@@ -753,6 +804,10 @@ main() {
             echo ""
             deploy_all_a2a_agents
             echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            deploy_mcp_3lo_server
+            echo ""
             display_deployment_summary
             return
             ;;
@@ -761,7 +816,7 @@ main() {
             exit 0
             ;;
         *)
-            log_error "Invalid option. Please select 0-6."
+            log_error "Invalid option. Please select 0-7."
             exit 1
             ;;
     esac

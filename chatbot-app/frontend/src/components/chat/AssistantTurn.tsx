@@ -589,7 +589,14 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
                 {[
                   latencyMetrics?.timeToFirstToken && `TTFT ${latencyMetrics.timeToFirstToken}ms`,
                   latencyMetrics?.endToEndLatency && `E2E ${(latencyMetrics.endToEndLatency / 1000).toFixed(1)}s`,
-                  tokenUsage && `${(tokenUsage.inputTokens / 1000).toFixed(1)}k in · ${tokenUsage.outputTokens} out`,
+                  tokenUsage && `${(tokenUsage.inputTokens / 1000).toFixed(1)}k in · ${tokenUsage.outputTokens} out${
+                    (tokenUsage.cacheReadInputTokens ?? 0) > 0 || (tokenUsage.cacheWriteInputTokens ?? 0) > 0
+                      ? ` (${[
+                          (tokenUsage.cacheReadInputTokens ?? 0) > 0 && `${tokenUsage.cacheReadInputTokens!.toLocaleString()} hit`,
+                          (tokenUsage.cacheWriteInputTokens ?? 0) > 0 && `${tokenUsage.cacheWriteInputTokens!.toLocaleString()} write`,
+                        ].filter(Boolean).join(', ')})`
+                      : ''
+                  }`,
                 ].filter(Boolean).join(' · ')}
               </span>
             </div>
