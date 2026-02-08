@@ -607,6 +607,130 @@
           "displayName": { "running": "Getting thread", "complete": "Got thread" }
         }
       ]
+    },
+    {
+      "id": "mcp_calendar",
+      "name": "Google Calendar",
+      "description": "Calendar management: view, create, update, delete events and check availability via Google OAuth (3LO)",
+      "category": "productivity",
+      "icon": "",
+      "enabled": false,
+      "isDynamic": true,
+      "runtime_arn_ssm": "/strands-agent-chatbot/dev/mcp/mcp-3lo-runtime-arn",
+      "tags": ["calendar", "productivity", "schedule", "google", "meetings"],
+      "systemPromptGuidance": "**Google Calendar Tool Usage:**\n- list_calendars: Get all user's calendars (primary, shared, subscribed)\n- list_events: List upcoming events with date range filters and search\n- get_event: Get detailed event information\n- create_event: Create new calendar events with attendees and reminders\n- update_event: Modify existing events (time, title, description, attendees)\n- delete_event: Remove events with optional notification to attendees\n- quick_add_event: Create event from natural language (e.g., 'Meeting with John tomorrow at 3pm')\n- check_availability: Query free/busy status for scheduling\n\n**Time Format:**\n- RFC3339 format: 2024-01-15T09:00:00Z (UTC) or 2024-01-15T09:00:00+09:00 (with timezone)\n- All-day events: use date format YYYY-MM-DD\n\n**Common Operations:**\n- Schedule meeting: create_event with attendees parameter\n- Find available time: check_availability before creating events\n- Quick scheduling: quick_add_event for natural language input\n- Reschedule: update_event with new start_time and end_time",
+      "tools": [
+        {
+          "id": "mcp_list_calendars",
+          "name": "List Calendars",
+          "description": "List all user's calendars (primary, shared, subscribed)",
+          "displayName": { "running": "Listing calendars", "complete": "Listed calendars" }
+        },
+        {
+          "id": "mcp_list_events",
+          "name": "List Events",
+          "description": "List calendar events with date range and search filters",
+          "displayName": { "running": "Listing events", "complete": "Listed events" }
+        },
+        {
+          "id": "mcp_get_event",
+          "name": "Get Event",
+          "description": "Get detailed information about a specific event",
+          "displayName": { "running": "Getting event", "complete": "Got event" }
+        },
+        {
+          "id": "mcp_create_event",
+          "name": "Create Event",
+          "description": "Create a new calendar event with attendees and reminders",
+          "displayName": { "running": "Creating event", "complete": "Created event" }
+        },
+        {
+          "id": "mcp_update_event",
+          "name": "Update Event",
+          "description": "Update an existing calendar event",
+          "displayName": { "running": "Updating event", "complete": "Updated event" }
+        },
+        {
+          "id": "mcp_delete_event",
+          "name": "Delete Event",
+          "description": "Delete a calendar event with optional attendee notification",
+          "displayName": { "running": "Deleting event", "complete": "Deleted event" }
+        },
+        {
+          "id": "mcp_quick_add_event",
+          "name": "Quick Add Event",
+          "description": "Create event from natural language text (e.g., 'Meeting tomorrow at 3pm')",
+          "displayName": { "running": "Adding event", "complete": "Added event" }
+        },
+        {
+          "id": "mcp_check_availability",
+          "name": "Check Availability",
+          "description": "Check free/busy status for scheduling meetings",
+          "displayName": { "running": "Checking availability", "complete": "Checked availability" }
+        }
+      ]
+    },
+    {
+      "id": "mcp_notion",
+      "name": "Notion",
+      "description": "Notion workspace management: search, read, create, and update pages and databases via OAuth (3LO)",
+      "category": "productivity",
+      "icon": "",
+      "enabled": false,
+      "isDynamic": true,
+      "runtime_arn_ssm": "/strands-agent-chatbot/dev/mcp/mcp-3lo-runtime-arn",
+      "tags": ["notion", "productivity", "notes", "database", "wiki", "knowledge"],
+      "systemPromptGuidance": "**Notion Tool Usage:**\n- notion_search: Search across all accessible pages and databases\n- notion_list_databases: List all databases the user has shared with the integration\n- notion_query_database: Query a database with filters and sorts\n- notion_get_page: Get page properties and metadata\n- notion_create_page: Create new page in database or as child of another page\n- notion_update_page: Update page properties (not content)\n- notion_get_block_children: Get page content (blocks - paragraphs, headings, lists, etc.)\n- notion_append_blocks: Add content blocks to a page\n\n**Block Types for append_blocks:**\n- paragraph: {\"type\": \"paragraph\", \"paragraph\": {\"rich_text\": [{\"type\": \"text\", \"text\": {\"content\": \"text\"}}]}}\n- heading_1/2/3: {\"type\": \"heading_1\", \"heading_1\": {\"rich_text\": [...]}}\n- bulleted_list_item: {\"type\": \"bulleted_list_item\", \"bulleted_list_item\": {\"rich_text\": [...]}}\n- numbered_list_item: {\"type\": \"numbered_list_item\", \"numbered_list_item\": {\"rich_text\": [...]}}\n- to_do: {\"type\": \"to_do\", \"to_do\": {\"rich_text\": [...], \"checked\": false}}\n- toggle: {\"type\": \"toggle\", \"toggle\": {\"rich_text\": [...]}}\n- code: {\"type\": \"code\", \"code\": {\"rich_text\": [...], \"language\": \"python\"}}\n- quote: {\"type\": \"quote\", \"quote\": {\"rich_text\": [...]}}\n- divider: {\"type\": \"divider\", \"divider\": {}}\n\n**Common Operations:**\n- Find pages: notion_search with query text\n- Read page content: notion_get_page for properties, then notion_get_block_children for content\n- Add notes: notion_append_blocks to existing page\n- Create new page: notion_create_page with parent (database_id or page_id)",
+      "tools": [
+        {
+          "id": "mcp_notion_search",
+          "name": "Search Notion",
+          "description": "Search across all accessible Notion pages and databases",
+          "displayName": { "running": "Searching Notion", "complete": "Searched Notion" }
+        },
+        {
+          "id": "mcp_notion_list_databases",
+          "name": "List Databases",
+          "description": "List all Notion databases shared with the integration",
+          "displayName": { "running": "Listing databases", "complete": "Listed databases" }
+        },
+        {
+          "id": "mcp_notion_query_database",
+          "name": "Query Database",
+          "description": "Query a Notion database with filters and sorts",
+          "displayName": { "running": "Querying database", "complete": "Queried database" }
+        },
+        {
+          "id": "mcp_notion_get_page",
+          "name": "Get Page",
+          "description": "Get Notion page properties and metadata",
+          "displayName": { "running": "Getting page", "complete": "Got page" }
+        },
+        {
+          "id": "mcp_notion_create_page",
+          "name": "Create Page",
+          "description": "Create a new page in a database or as child of another page",
+          "displayName": { "running": "Creating page", "complete": "Created page" }
+        },
+        {
+          "id": "mcp_notion_update_page",
+          "name": "Update Page",
+          "description": "Update Notion page properties",
+          "displayName": { "running": "Updating page", "complete": "Updated page" }
+        },
+        {
+          "id": "mcp_notion_get_block_children",
+          "name": "Get Page Content",
+          "description": "Get page content blocks (paragraphs, headings, lists, etc.)",
+          "displayName": { "running": "Getting content", "complete": "Got content" }
+        },
+        {
+          "id": "mcp_notion_append_blocks",
+          "name": "Append Content",
+          "description": "Add content blocks to a Notion page",
+          "displayName": { "running": "Adding content", "complete": "Added content" }
+        }
+      ]
     }
   ]
 }

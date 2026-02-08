@@ -1,4 +1,4 @@
-import { useCallback, useRef, startTransition } from 'react'
+import { useCallback, useRef, startTransition, useEffect } from 'react'
 import { flushSync } from 'react-dom'
 import { Message, ToolExecution } from '@/types/chat'
 import { StreamEvent, ChatSessionState, ChatUIState, WorkspaceFile, SWARM_AGENT_DISPLAY_NAMES, SwarmAgentStep } from '@/types/events'
@@ -372,6 +372,55 @@ export const useStreamEvents = ({
       const toolName = toolExecution?.toolName
       const isCancelled = data.status === 'error'
 
+      // Check for OAuth authorization required in tool result
+      if (data.result) {
+        try {
+          const resultJson = JSON.parse(data.result)
+          if (resultJson.oauth_required === true && resultJson.auth_url) {
+            // Extract service name from message or use default
+            const serviceName = resultJson.message?.match(/^(\w+)\s+authorization/i)?.[1] || 'Service'
+
+            console.log(`[OAuth] Authorization required for ${serviceName}:`, resultJson.auth_url)
+
+            // Set pending OAuth state - this will trigger UI to show OAuth prompt
+            setSessionState(prev => ({
+              ...prev,
+              pendingOAuth: {
+                toolUseId: data.toolUseId,
+                toolName: toolName || 'unknown',
+                authUrl: resultJson.auth_url,
+                serviceName,
+                popupOpened: false
+              }
+            }))
+
+            // Auto-open OAuth popup
+            const popup = window.open(
+              resultJson.auth_url,
+              'oauth_popup',
+              'width=500,height=700,scrollbars=yes,resizable=yes'
+            )
+
+            if (popup) {
+              popup.focus()
+              // Mark popup as opened
+              setSessionState(prev => ({
+                ...prev,
+                pendingOAuth: prev.pendingOAuth ? {
+                  ...prev.pendingOAuth,
+                  popupOpened: true
+                } : null
+              }))
+            }
+
+            // Don't process further - wait for OAuth completion
+            return
+          }
+        } catch {
+          // Not JSON or doesn't have oauth_required - continue normal processing
+        }
+      }
+
       // Track tool completion in swarm mode for expanded view
       if (swarmModeRef.current.isActive && swarmModeRef.current.agentSteps.length > 0) {
         const stepIndex = swarmModeRef.current.agentSteps.length - 1
@@ -575,7 +624,8 @@ export const useStreamEvents = ({
             browserSession: prev.browserSession,
             browserProgress: undefined,
             researchProgress: undefined,
-            interrupt: null
+            interrupt: null,
+            pendingOAuth: prev.pendingOAuth  // Preserve pending OAuth on stop
           }))
         })
 
@@ -833,7 +883,8 @@ export const useStreamEvents = ({
         browserProgress: undefined,
         researchProgress: undefined,
         interrupt: null,
-        swarmProgress: prev.swarmProgress  // Preserve swarm progress for expanded view
+        swarmProgress: prev.swarmProgress,  // Preserve swarm progress for expanded view
+        pendingOAuth: prev.pendingOAuth  // Preserve pending OAuth until completion callback
       }))
 
       streamingStartedRef.current = false
@@ -892,7 +943,8 @@ export const useStreamEvents = ({
         browserProgress: undefined,  // Clear browser progress on error
         researchProgress: undefined,  // Clear research progress on error
         interrupt: null,
-        swarmProgress: undefined  // Clear swarm progress on error
+        swarmProgress: undefined,  // Clear swarm progress on error
+        pendingOAuth: prev.pendingOAuth  // Preserve pending OAuth on error
       }))
 
       // Reset refs on error

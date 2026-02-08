@@ -16,4 +16,4 @@ COPY src/ ./src/
 
 EXPOSE 8000
 
-CMD ["python", "src/gmail_mcp_server.py"]
+CMD ["python", "src/mcp_server.py"]

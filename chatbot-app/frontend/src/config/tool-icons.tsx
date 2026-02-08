@@ -20,6 +20,8 @@ import {
   SiArxiv,
   SiGooglemaps,
   SiGmail,
+  SiGooglecalendar,
+  SiNotion,
 } from 'react-icons/si';
 
 /**
@@ -64,6 +66,11 @@ export const toolIconMap: Record<string, IconType> = {
 
   // Productivity (MCP)
   mcp_gmail: SiGmail,
+  mcp_calendar: SiGooglecalendar,
+  mcp_notion: SiNotion,
+
+  // Research Agent
+  'agentcore_research-agent': TbSearch,
 };
 
 /**

@@ -261,6 +261,15 @@ export interface InterruptState {
   }>;
 }
 
+// OAuth authorization pending state
+export interface PendingOAuthState {
+  toolUseId: string;
+  toolName: string;
+  authUrl: string;
+  serviceName: string;
+  popupOpened: boolean;
+}
+
 export interface ChatSessionState {
   reasoning: ReasoningState | null;
   streaming: StreamingState | null;
@@ -279,6 +288,7 @@ export interface ChatSessionState {
   };
   interrupt: InterruptState | null;
   swarmProgress?: SwarmProgress;
+  pendingOAuth?: PendingOAuthState | null;
 }
 
 export type AgentStatus =

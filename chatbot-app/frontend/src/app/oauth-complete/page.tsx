@@ -42,8 +42,19 @@ export default function OAuthCompletePage() {
       if (sessionStorage.getItem(processedKey)) {
         console.log('[OAuth] Session already processed, showing success')
         setStatus('success')
-        setMessage('Authorization completed! You can now close this window and retry the action.')
-        setTimeout(() => window.close(), 3000)
+        setMessage('Authorization completed! This window will close automatically.')
+        // Notify parent window
+        if (window.opener && !window.opener.closed) {
+          try {
+            window.opener.postMessage(
+              { type: 'oauth_complete', sessionId, success: true },
+              window.location.origin
+            )
+          } catch (e) {
+            console.warn('[OAuth] Could not notify parent window:', e)
+          }
+        }
+        setTimeout(() => window.close(), 2000)
         return
       }
 
@@ -88,12 +99,25 @@ export default function OAuthCompletePage() {
         sessionStorage.setItem(processedKey, 'true')
 
         setStatus('success')
-        setMessage(result.message || 'Authorization completed! You can now close this window and retry the action.')
+        setMessage(result.message || 'Authorization completed! This window will close automatically.')
 
-        // Auto-close after a delay - give user time to see the success message
+        // Notify parent window that OAuth is complete
+        if (window.opener && !window.opener.closed) {
+          try {
+            window.opener.postMessage(
+              { type: 'oauth_complete', sessionId, success: true },
+              window.location.origin
+            )
+            console.log('[OAuth] Notified parent window of success')
+          } catch (e) {
+            console.warn('[OAuth] Could not notify parent window:', e)
+          }
+        }
+
+        // Auto-close after a short delay
         setTimeout(() => {
           window.close()
-        }, 5000)
+        }, 2000)
 
       } catch (error) {
         console.error('[OAuth] Error completing flow:', error)
@@ -105,8 +129,19 @@ export default function OAuthCompletePage() {
           console.log('[OAuth] Session likely already processed, treating as success')
           sessionStorage.setItem(processedKey, 'true')
           setStatus('success')
-          setMessage('Authorization completed! You can now close this window and retry the action.')
-          setTimeout(() => window.close(), 5000)
+          setMessage('Authorization completed! This window will close automatically.')
+          // Notify parent window
+          if (window.opener && !window.opener.closed) {
+            try {
+              window.opener.postMessage(
+                { type: 'oauth_complete', sessionId, success: true },
+                window.location.origin
+              )
+            } catch (e) {
+              console.warn('[OAuth] Could not notify parent window:', e)
+            }
+          }
+          setTimeout(() => window.close(), 2000)
           return
         }
 
@@ -141,6 +176,9 @@ export default function OAuthCompletePage() {
             </h1>
             <p className="text-gray-600 dark:text-gray-400 mb-4">
               {message}
+            </p>
+            <p className="text-sm text-blue-600 dark:text-blue-400">
+              Your request will continue automatically.
             </p>
             <p className="text-sm text-gray-500 dark:text-gray-500">
               This window will close automatically...

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Message, Tool, ToolExecution } from '@/types/chat'
-import { ReasoningState, ChatSessionState, ChatUIState, InterruptState, AgentStatus } from '@/types/events'
+import { ReasoningState, ChatSessionState, ChatUIState, InterruptState, AgentStatus, PendingOAuthState } from '@/types/events'
 import { detectBackendUrl } from '@/utils/chat'
 import { useStreamEvents } from './useStreamEvents'
 import { useChatAPI, SessionPreferences } from './useChatAPI'
@@ -75,6 +75,8 @@ interface UseChatReturn {
   finalizeVoiceMessage: () => void
   // Artifact message
   addArtifactMessage: (artifact: { id: string; type: string; title: string; wordCount?: number }) => void
+  // OAuth state
+  pendingOAuth: PendingOAuthState | null | undefined
 }
 
 // Default preferences when session has no saved preferences
@@ -112,7 +114,8 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     streaming: null,
     toolExecutions: [],
     browserSession: null,
-    interrupt: null
+    interrupt: null,
+    pendingOAuth: null
   })
 
   const [uiState, setUIState] = useState<ChatUIState>({
@@ -325,7 +328,8 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
       browserSession: null,
       browserProgress: undefined,
       researchProgress: undefined,
-      interrupt: null
+      interrupt: null,
+      pendingOAuth: null
     })
 
     try {
@@ -487,6 +491,68 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     loadBrowserSession()
   }, [sessionId])
 
+  // ==================== OAUTH COMPLETION LISTENER ====================
+  // Listen for postMessage from OAuth popup window
+  useEffect(() => {
+    const handleOAuthMessage = async (event: MessageEvent) => {
+      // Verify origin for security
+      if (event.origin !== window.location.origin) return
+      if (event.data?.type !== 'oauth_complete') return
+
+      console.log('[useChat] OAuth completion message received:', event.data)
+
+      const pendingOAuth = sessionState.pendingOAuth
+      if (!pendingOAuth) {
+        console.log('[useChat] No pending OAuth to resume')
+        return
+      }
+
+      // Clear pending OAuth state
+      setSessionState(prev => ({ ...prev, pendingOAuth: null }))
+
+      if (event.data.success) {
+        console.log(`[useChat] OAuth completed successfully for ${pendingOAuth.serviceName}, retrying...`)
+
+        // Add a retry message to trigger the agent to try again
+        const retryMessage = `The ${pendingOAuth.serviceName} authorization has been completed. Please continue with the previous request.`
+
+        // Set UI state to show we're retrying
+        setUIState(prev => ({
+          ...prev,
+          isTyping: true,
+          agentStatus: 'thinking'
+        }))
+
+        // Send retry message automatically
+        try {
+          await apiSendMessage(
+            retryMessage,
+            undefined,
+            () => {},
+            () => {
+              setSessionState(prev => ({
+                reasoning: null,
+                streaming: null,
+                toolExecutions: [],
+                browserSession: prev.browserSession,
+                browserProgress: undefined,
+                researchProgress: undefined,
+                interrupt: null,
+                pendingOAuth: null
+              }))
+            }
+          )
+        } catch (error) {
+          console.error('[useChat] Failed to send retry message:', error)
+          setUIState(prev => ({ ...prev, isTyping: false, agentStatus: 'idle' }))
+        }
+      }
+    }
+
+    window.addEventListener('message', handleOAuthMessage)
+    return () => window.removeEventListener('message', handleOAuthMessage)
+  }, [sessionState.pendingOAuth, apiSendMessage])
+
   // ==================== ACTIONS ====================
   const toggleTool = useCallback(async (toolId: string) => {
     await apiToggleTool(toolId)
@@ -512,7 +578,8 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
         browserSession: null,
         browserProgress: undefined,
         researchProgress: undefined,
-        interrupt: null
+        interrupt: null,
+        pendingOAuth: null
       })
       setUIState(prev => ({ ...prev, isTyping: false, agentStatus: 'idle' }))
       setMessages([])
@@ -619,7 +686,8 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
           browserSession: prev.browserSession,
           browserProgress: undefined,
           researchProgress: undefined,
-          interrupt: null
+          interrupt: null,
+          pendingOAuth: null
         }))
       },
       undefined, // overrideEnabledTools
@@ -951,5 +1019,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
     finalizeVoiceMessage,
     // Artifact message
     addArtifactMessage,
+    // OAuth state
+    pendingOAuth: sessionState.pendingOAuth,
   }
 }

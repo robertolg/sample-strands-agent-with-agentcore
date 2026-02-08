@@ -288,6 +288,94 @@ print(callback_url)
 fi
 echo ""
 
+# Check if Notion OAuth provider already exists
+NOTION_PROVIDER_EXISTS=$($PYTHON_CMD -c "
+import boto3
+try:
+    client = boto3.client('bedrock-agentcore-control', region_name='${AWS_REGION}')
+    client.get_oauth2_credential_provider(name='notion-oauth-provider')
+    print('exists')
+except Exception:
+    print('not_found')
+" 2>/dev/null || echo "not_found")
+
+if [ "$NOTION_PROVIDER_EXISTS" = "exists" ]; then
+    log_info "Notion OAuth provider already registered"
+
+    # Get callback URL from existing provider
+    NOTION_CALLBACK_URL=$($PYTHON_CMD -c "
+import boto3
+client = boto3.client('bedrock-agentcore-control', region_name='${AWS_REGION}')
+response = client.get_oauth2_credential_provider(name='notion-oauth-provider')
+print(response.get('callbackUrl', ''))
+" 2>/dev/null || echo "")
+
+    if [ -n "$NOTION_CALLBACK_URL" ]; then
+        log_info "Notion callback URL: $NOTION_CALLBACK_URL"
+    fi
+else
+    # Provider not registered yet - ask for credentials if not provided via env vars
+    if [ -z "$NOTION_CLIENT_ID" ] || [ -z "$NOTION_CLIENT_SECRET" ]; then
+        log_warn "Notion OAuth provider not yet registered"
+        echo ""
+        echo "To register, provide Notion OAuth credentials."
+        echo "  (Create Public Integration at https://www.notion.so/my-integrations)"
+        echo ""
+        read -p "Enter Notion OAuth Client ID (or press Enter to skip): " NOTION_CLIENT_ID < /dev/tty
+        if [ -n "$NOTION_CLIENT_ID" ]; then
+            read -s -p "Enter Notion OAuth Client Secret: " NOTION_CLIENT_SECRET < /dev/tty
+            echo ""
+        fi
+    fi
+
+    if [ -n "$NOTION_CLIENT_ID" ] && [ -n "$NOTION_CLIENT_SECRET" ]; then
+        log_step "Registering Notion OAuth credential provider..."
+
+        NOTION_CALLBACK_URL=$($PYTHON_CMD -c "
+import boto3
+
+client = boto3.client('bedrock-agentcore-control', region_name='${AWS_REGION}')
+response = client.create_oauth2_credential_provider(
+    name='notion-oauth-provider',
+    credentialProviderVendor='CustomOauth2',
+    oauth2ProviderConfigInput={
+        'customOauth2ProviderConfig': {
+            'clientId': '${NOTION_CLIENT_ID}',
+            'clientSecret': '${NOTION_CLIENT_SECRET}',
+            'oauthDiscovery': {
+                'authorizationServerMetadata': {
+                    'issuer': 'https://api.notion.com',
+                    'authorizationEndpoint': 'https://api.notion.com/v1/oauth/authorize',
+                    'tokenEndpoint': 'https://api.notion.com/v1/oauth/token',
+                }
+            }
+        }
+    }
+)
+
+callback_url = response.get('callbackUrl', 'N/A')
+print(callback_url)
+" 2>/dev/null || echo "")
+
+        if [ -n "$NOTION_CALLBACK_URL" ] && [ "$NOTION_CALLBACK_URL" != "N/A" ]; then
+            log_info "Provider registered with callback URL: $NOTION_CALLBACK_URL"
+            echo ""
+            echo "IMPORTANT: Add this Callback URL to your Notion Integration's Redirect URIs:"
+            echo "  $NOTION_CALLBACK_URL"
+        fi
+
+        if [ $? -eq 0 ]; then
+            log_info "Notion OAuth provider registered"
+        else
+            log_error "Failed to register Notion OAuth provider"
+        fi
+    else
+        log_warn "Skipped - Notion OAuth provider not registered"
+        log_warn "To register later, re-run with NOTION_CLIENT_ID and NOTION_CLIENT_SECRET"
+    fi
+fi
+echo ""
+
 # ── 4. Retrieve Stack Outputs ─────────────────────────────────
 log_step "Retrieving stack outputs..."
 echo ""
@@ -405,10 +493,16 @@ echo ""
 echo "3LO OAuth Configuration:"
 echo "  Frontend Callback URL: ${FRONTEND_CALLBACK_URL:-'Not configured'}"
 echo ""
-echo "Prerequisites:"
+echo "Prerequisites (Google):"
 echo "  1. Create Google OAuth 2.0 Client ID at https://console.cloud.google.com/apis/credentials"
 echo "  2. Enable Gmail API at https://console.cloud.google.com/apis/library/gmail.googleapis.com"
-echo "  3. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars and re-run deploy.sh"
+echo "  3. Enable Calendar API at https://console.cloud.google.com/apis/library/calendar-json.googleapis.com"
+echo "  4. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars and re-run deploy.sh"
+echo ""
+echo "Prerequisites (Notion):"
+echo "  1. Create Public Integration at https://www.notion.so/my-integrations"
+echo "  2. Set Distribution type to 'Public' and configure OAuth redirect URI"
+echo "  3. Set NOTION_CLIENT_ID and NOTION_CLIENT_SECRET env vars and re-run deploy.sh"
 echo ""
 
 log_info "Deployment successful!"
