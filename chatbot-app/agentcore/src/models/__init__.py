@@ -2,9 +2,7 @@
 
 from models.schemas import (
     FileContent,
-    InvocationInput,
-    InvocationRequest,
-    InvocationResponse,
+    ApiKeys,
 )
 
 from models.swarm_schemas import (
@@ -17,9 +15,7 @@ from models.swarm_schemas import (
 __all__ = [
     # Core schemas
     "FileContent",
-    "InvocationInput",
-    "InvocationRequest",
-    "InvocationResponse",
+    "ApiKeys",
     # Swarm events
     "SwarmNodeStartEvent",
     "SwarmNodeStopEvent",

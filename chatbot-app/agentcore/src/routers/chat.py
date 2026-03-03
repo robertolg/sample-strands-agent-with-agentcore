@@ -10,7 +10,6 @@ Resume/reconnection is handled by the BFF-side event buffer (Next.js).
 """
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import ValidationError
 from fastapi.responses import StreamingResponse
 from typing import AsyncGenerator, List, Optional
 import asyncio
@@ -21,7 +20,8 @@ import time
 import uuid
 from opentelemetry import trace
 
-from models.schemas import InvocationRequest
+from models.schemas import FileContent
+from agent.processor.multimodal_builder import build_prompt
 from agents.factory import create_agent
 from streaming.agui_event_processor import AGUIStreamEventProcessor
 from streaming.execution_registry import ExecutionRegistry, ExecutionStatus
@@ -32,13 +32,6 @@ logger = logging.getLogger(__name__)
 
 registry = ExecutionRegistry()
 
-
-def _is_agui_request(body: dict) -> bool:
-    """Returns True if body matches AG-UI RunAgentInput (has thread_id/run_id, lacks session_id/user_id)."""
-    return (
-        "thread_id" in body and "run_id" in body
-        and "session_id" not in body and "user_id" not in body
-    )
 
 router = APIRouter(tags=["chat"])
 
@@ -184,25 +177,22 @@ async def _create_tail_stream(
 @router.post("/invocations")
 async def invocations(http_request: Request):
     """
-    Main endpoint for agent invocations.
+    Main endpoint for agent invocations (AG-UI protocol only).
 
-    Accepts both the existing InvocationRequest format and AG-UI RunAgentInput format,
-    routing to the appropriate handler based on request body fields.
+    All requests use AG-UI RunAgentInput format (thread_id + run_id).
+    Lifecycle actions (warmup, stop, elicitation) are indicated via state.action.
     """
     body = await http_request.json()
 
-    if _is_agui_request(body):
-        return await _handle_agui_invocation(body, http_request)
+    # AG-UI state에서 lifecycle action 확인
+    state = body.get("state") or {}
+    action = state.get("action")
+    thread_id = body.get("thread_id", "")
 
-    try:
-        request = InvocationRequest(**body)
-    except ValidationError as e:
-        raise HTTPException(status_code=422, detail=e.errors())
-    input_data = request.input
-
-    # Handle warmup requests (Lambda container warmup)
-    if input_data.warmup:
-        logger.info(f"[Warmup] Container warmed - session={input_data.session_id}, user={input_data.user_id}")
+    # Warmup
+    if action == "warmup":
+        user_id = state.get("user_id", "anonymous")
+        logger.info(f"[Warmup] Container warmed - session={thread_id}, user={user_id}")
 
         # Pre-cache memory strategy IDs to speed up first real request
         memory_id = os.environ.get('MEMORY_ID')
@@ -230,106 +220,32 @@ async def invocations(http_request: Request):
 
         return {"status": "warm"}
 
-    # Handle stop action - set in-memory flag for immediate stop
-    if input_data.action == "stop":
+    # Stop
+    if action == "stop":
+        user_id = state.get("user_id", "anonymous")
         from agent.stop_signal import get_stop_signal_provider
         provider = get_stop_signal_provider()
-        provider.request_stop(input_data.user_id, input_data.session_id)
-        logger.info(f"[Stop] Stop signal set via /invocations for session={input_data.session_id}")
-        return {"status": "stop_requested", "session_id": input_data.session_id}
+        provider.request_stop(user_id, thread_id)
+        logger.info(f"[Stop] Stop signal set for session={thread_id}")
+        return {"status": "stop_requested", "session_id": thread_id}
 
-    # Handle elicitation_complete action - signal waiting MCP elicitation callback
-    if input_data.action == "elicitation_complete":
+    # Elicitation complete
+    if action == "elicitation_complete":
         from agent.mcp.elicitation_bridge import get_bridge
-        bridge = get_bridge(input_data.session_id)
-        elicitation_id = getattr(input_data, 'elicitation_id', None)
+        bridge = get_bridge(thread_id)
+        elicitation_id = state.get("elicitation_id")
         if bridge:
             bridge.complete_elicitation(elicitation_id)
-            logger.info(f"[Elicitation] Complete signal sent for session={input_data.session_id}")
+            logger.info(f"[Elicitation] Complete for session={thread_id}")
         else:
-            logger.warning(f"[Elicitation] No bridge found for session={input_data.session_id}")
+            logger.warning(f"[Elicitation] No bridge found for session={thread_id}")
         return {"status": "elicitation_completed"}
 
-    # Add tracing attributes
-    span = trace.get_current_span()
-    span.set_attribute("user.id", input_data.user_id or "anonymous")
-    span.set_attribute("session.id", input_data.session_id)
+    # Normal agent execution — requires thread_id + run_id
+    if "thread_id" not in body or "run_id" not in body:
+        raise HTTPException(status_code=422, detail="AG-UI format required: thread_id and run_id are required")
 
-    request_type = input_data.request_type or "normal"
-    logger.info(f"Invocation: session={input_data.session_id}, user={input_data.user_id}, type={request_type}")
-
-    try:
-        # Parse message for special cases (HITL interrupt response, compose confirmation)
-        message_content, special_params = _parse_message(input_data.message, request_type)
-
-        # Create agent using factory
-        agent = create_agent(
-            request_type=request_type,
-            session_id=input_data.session_id,
-            user_id=input_data.user_id,
-            enabled_tools=input_data.enabled_tools,
-            model_id=input_data.model_id,
-            temperature=input_data.temperature,
-            system_prompt=input_data.system_prompt,
-            caching_enabled=input_data.caching_enabled,
-            compaction_enabled=input_data.compaction_enabled,
-            api_keys=input_data.api_keys,
-            auth_token=input_data.auth_token,
-        )
-
-        # Create execution in registry with unique run_id
-        run_id = str(uuid.uuid4())
-        execution = await registry.create_execution(input_data.session_id, input_data.user_id, run_id)
-
-        # Run agent as background task — events buffered in execution
-        async def run_agent_to_buffer():
-            try:
-                stream = agent.stream_async(
-                    message_content,
-                    files=input_data.files,
-                    selected_artifact_id=input_data.selected_artifact_id,
-                    api_keys=input_data.api_keys,
-                    **special_params
-                )
-                async for sse_chunk in stream:
-                    event_type = _extract_event_type(sse_chunk)
-                    execution.append_event(sse_chunk, event_type)
-            except Exception as e:
-                logger.error(f"[Execution] Agent error for {execution.execution_id}: {e}", exc_info=True)
-                error_event = f'data: {json.dumps({"type": "error", "message": str(e)})}\n\n'
-                execution.append_event(error_event, "error")
-            finally:
-                if execution.status == ExecutionStatus.RUNNING:
-                    execution.status = ExecutionStatus.COMPLETED
-                execution.completed_at = time.time()
-                logger.info(f"[Execution] Completed {execution.execution_id}, {len(execution.events)} events buffered")
-
-        execution.task = asyncio.create_task(run_agent_to_buffer())
-
-        # Return tail stream that replays buffer + follows live events
-        tail_stream = _create_tail_stream(execution, cursor=0, http_request=http_request)
-        final_stream = keepalive_stream(tail_stream, input_data.session_id)
-
-        return StreamingResponse(
-            final_stream,
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-                "X-Session-ID": input_data.session_id,
-                "X-Request-Type": request_type,
-                "X-Execution-ID": execution.execution_id,
-                "X-Run-ID": run_id,
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"Error in invocations: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail="Agent processing failed. Please check logs for details."
-        )
+    return await _handle_agui_invocation(body, http_request)
 
 
 @router.get("/ping")
@@ -439,15 +355,21 @@ async def _handle_agui_invocation(body: dict, http_request: Request) -> Streamin
     temperature = None
     system_prompt = None
     caching_enabled = None
+    compaction_enabled = None
     request_type = "normal"
     auth_token = None
+    selected_artifact_id = None
+    api_keys = None
     if input_data.state and isinstance(input_data.state, dict):
         model_id = input_data.state.get("model_id")
         temperature = input_data.state.get("temperature")
         system_prompt = input_data.state.get("system_prompt")
         caching_enabled = input_data.state.get("caching_enabled")
+        compaction_enabled = input_data.state.get("compaction_enabled")
         request_type = input_data.state.get("request_type", "normal")
         auth_token = input_data.state.get("auth_token")
+        selected_artifact_id = input_data.state.get("selected_artifact_id")
+        api_keys = input_data.state.get("api_keys")
 
     logger.info(f"AG-UI invocation: thread_id={thread_id}, run_id={run_id}, user_id={user_id}, tools={len(enabled_tools) if enabled_tools else 0}")
 
@@ -461,6 +383,8 @@ async def _handle_agui_invocation(body: dict, http_request: Request) -> Streamin
             temperature=temperature,
             system_prompt=system_prompt,
             caching_enabled=caching_enabled,
+            compaction_enabled=compaction_enabled,
+            api_keys=api_keys,
             auth_token=auth_token,
         )
 
@@ -474,6 +398,7 @@ async def _handle_agui_invocation(body: dict, http_request: Request) -> Streamin
             "user_id": user_id,
             "model_id": agent.model_id,
             "session_manager": agent.session_manager,
+            "selected_artifact_id": selected_artifact_id,
         }
 
         accept = http_request.headers.get("accept", "")
@@ -486,75 +411,31 @@ async def _handle_agui_invocation(body: dict, http_request: Request) -> Streamin
         # Parse message for special cases (HITL interrupt response, compose confirmation)
         message_content, special_params = _parse_message(message, request_type)
 
-        # Save uploaded files (images + documents) to S3 workspace
-        if image_content_parts or doc_content_parts:
-            import base64 as _base64_store
-            uploaded_files_for_storage = []
-            for idx, img in enumerate(image_content_parts):
-                try:
-                    mime = img.get('mediaType', 'image/png')
-                    ext = mime.split('/')[-1] if '/' in mime else 'png'
-                    if ext == 'jpeg':
-                        ext = 'jpg'
-                    fname = img.get('name') or ''
-                    if not fname:
-                        fname = f"uploaded_image_{idx+1}.{ext}"
-                    elif '.' not in fname:
-                        fname = f"{fname}.{ext}"
-                    uploaded_files_for_storage.append({
-                        'filename': fname,
-                        'bytes': _base64_store.b64decode(img.get('data', '')),
-                        'content_type': mime,
-                    })
-                except Exception:
-                    pass
-            for doc in doc_content_parts:
-                try:
-                    uploaded_files_for_storage.append({
-                        'filename': doc.get('name', 'document'),
-                        'bytes': _base64_store.b64decode(doc.get('data', '')),
-                        'content_type': doc.get('mediaType', 'application/octet-stream'),
-                    })
-                except Exception:
-                    pass
-            if uploaded_files_for_storage:
-                try:
-                    from agent.processor.file_processor import auto_store_files
-                    auto_store_files(uploaded_files_for_storage, user_id, session_id)
-                except Exception as e:
-                    logger.warning(f"[AG-UI] Failed to store uploaded files to workspace: {e}")
-
-        # Build multimodal message when inline image/document parts were found
-        agui_message = message_content
-        if not isinstance(message_content, list) and (image_content_parts or doc_content_parts):
-            import base64 as _base64
-            content_list = []
-            if message:
-                content_list.append({"text": message})
+        # Build multimodal message using build_prompt() (handles size checks, sanitization, workspace storage)
+        if isinstance(message_content, list):
+            # Special case (e.g. HITL interrupt response) — bypass build_prompt, use as-is
+            agui_message = message_content
+        else:
+            raw_files = []
             for img in image_content_parts:
-                mime = img["mediaType"]
-                fmt = mime.split("/")[-1] if "/" in mime else "jpeg"
-                if fmt == "jpg":
-                    fmt = "jpeg"
-                raw_bytes = _base64.b64decode(img["data"])
-                content_list.append({"image": {"format": fmt, "source": {"bytes": raw_bytes}}})
-            fmt_map = {"vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-                       "vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-                       "vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
-                       "msword": "doc", "plain": "txt", "html": "html"}
-            _BEDROCK_DOC_MAX_BYTES = 4_500_000
+                raw_files.append(FileContent(
+                    filename=img.get("name") or "image",
+                    content_type=img.get("mediaType", "image/png"),
+                    bytes=img.get("data", ""),
+                ))
             for doc in doc_content_parts:
-                mime = doc["mediaType"]
-                fmt = mime.split("/")[-1] if "/" in mime else "pdf"
-                fmt = fmt_map.get(fmt, fmt)
-                raw_bytes = _base64.b64decode(doc["data"])
-                if len(raw_bytes) > _BEDROCK_DOC_MAX_BYTES:
-                    logger.warning(f"[AG-UI] Document too large for ContentBlock ({len(raw_bytes)} bytes), skipping: {doc.get('name', 'document')}")
-                    continue
-                name = doc.get("name", "document")
-                name_without_ext = name.rsplit(".", 1)[0] if "." in name else name
-                content_list.append({"document": {"format": fmt, "name": name_without_ext, "source": {"bytes": raw_bytes}}})
-            agui_message = content_list
+                raw_files.append(FileContent(
+                    filename=doc.get("name") or "document",
+                    content_type=doc.get("mediaType", "application/octet-stream"),
+                    bytes=doc.get("data", ""),
+                ))
+            agui_message, _ = build_prompt(
+                message=message_content,
+                files=raw_files or None,
+                user_id=user_id,
+                session_id=session_id,
+                auto_store=True,
+            )
 
         # Run agent as background task — events buffered in execution
         async def run_agui_to_buffer():
@@ -592,6 +473,7 @@ async def _handle_agui_invocation(body: dict, http_request: Request) -> Streamin
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
                 "Connection": "keep-alive",
+                "X-Session-ID": thread_id,
                 "X-Thread-ID": thread_id,
                 "X-Execution-ID": execution.execution_id,
                 "X-Run-ID": run_id,

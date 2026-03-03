@@ -3,16 +3,36 @@ Tests for chat.py router
 
 Tests cover:
 - /ping endpoint
-- /invocations endpoint
+- /invocations endpoint (AG-UI format)
 - Interrupt response handling
 - Disconnect-aware streaming
 - Error handling
+- Lifecycle actions (warmup, stop, elicitation)
 """
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi import Request
 from fastapi.testclient import TestClient
 import json
+import uuid
+
+
+def _agui_payload(
+    message: str = "Hello",
+    user_id: str = "test-user",
+    session_id: str = "test-session",
+    **state_overrides
+) -> dict:
+    """Helper to build an AG-UI payload for tests."""
+    state = {"user_id": user_id, **state_overrides}
+    return {
+        "thread_id": session_id,
+        "run_id": str(uuid.uuid4()),
+        "messages": [{"id": str(uuid.uuid4()), "role": "user", "content": message}],
+        "tools": [],
+        "context": [],
+        "state": state,
+    }
 
 
 # ============================================================
@@ -75,13 +95,7 @@ class TestAgentFactory:
 
         client.post(
             "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "test-session-123",
-                    "message": "Hello"
-                }
-            }
+            json=_agui_payload(session_id="test-session-123")
         )
 
         mock_factory.assert_called_once()
@@ -107,14 +121,7 @@ class TestAgentFactory:
 
         client.post(
             "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "test",
-                    "message": "Hello",
-                    "request_type": "swarm"
-                }
-            }
+            json=_agui_payload(request_type="swarm")
         )
 
         call_kwargs = mock_factory.call_args.kwargs
@@ -240,7 +247,7 @@ class TestExecutionRegistry:
 # ============================================================
 
 class TestInvocationsEndpoint:
-    """Tests for the /invocations endpoint."""
+    """Tests for the /invocations endpoint (AG-UI format)."""
 
     @pytest.fixture
     def mock_agent(self):
@@ -269,13 +276,7 @@ class TestInvocationsEndpoint:
 
         response = client.post(
             "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "test-session",
-                    "message": "Hello"
-                }
-            }
+            json=_agui_payload()
         )
 
         assert response.status_code == 200
@@ -295,13 +296,7 @@ class TestInvocationsEndpoint:
 
         response = client.post(
             "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "my-session-123",
-                    "message": "Test"
-                }
-            }
+            json=_agui_payload(session_id="my-session-123")
         )
 
         assert response.headers.get("x-session-id") == "my-session-123"
@@ -318,17 +313,13 @@ class TestInvocationsEndpoint:
         app.include_router(router)
         client = TestClient(app)
 
-        client.post(
-            "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "test",
-                    "message": "Test",
-                    "enabled_tools": ["calculator", "web_search"]
-                }
-            }
-        )
+        payload = _agui_payload()
+        payload["tools"] = [
+            {"name": "calculator", "description": ""},
+            {"name": "web_search", "description": ""},
+        ]
+
+        client.post("/invocations", json=payload)
 
         mock_factory.assert_called_once()
         call_kwargs = mock_factory.call_args.kwargs
@@ -336,8 +327,81 @@ class TestInvocationsEndpoint:
 
     @patch('routers.chat.create_agent')
     def test_invocations_handles_files(self, mock_factory, mock_agent):
-        """Test that files are passed to agent stream."""
+        """Test that binary file parts in messages are handled."""
         mock_factory.return_value = mock_agent
+
+        from routers.chat import router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        payload = _agui_payload(message="Analyze this")
+        payload["messages"] = [{
+            "id": str(uuid.uuid4()),
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this"},
+                {"type": "binary", "mime_type": "image/png", "data": "dGVzdA==", "filename": "test.png"},
+            ]
+        }]
+
+        response = client.post("/invocations", json=payload)
+
+        assert response.status_code == 200
+
+    def test_returns_422_on_missing_agui_fields(self):
+        """Test that 422 is returned when thread_id/run_id are missing."""
+        from routers.chat import router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        # Missing required AG-UI fields
+        response = client.post(
+            "/invocations",
+            json={"state": {"user_id": "test"}}
+        )
+
+        assert response.status_code == 422
+
+
+# ============================================================
+# Lifecycle Action Tests (warmup, stop, elicitation)
+# ============================================================
+
+class TestLifecycleActions:
+    """Tests for lifecycle actions via state.action."""
+
+    def test_warmup_returns_warm(self):
+        """Test warmup action returns warm status."""
+        from routers.chat import router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        response = client.post(
+            "/invocations",
+            json={
+                "thread_id": "warmup-session",
+                "run_id": str(uuid.uuid4()),
+                "state": {"action": "warmup", "user_id": "test-user"}
+            }
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "warm"}
+
+    @patch('routers.chat.get_stop_signal_provider')
+    def test_stop_sets_signal(self, mock_get_provider):
+        """Test stop action sets stop signal."""
+        mock_provider = MagicMock()
+        mock_get_provider.return_value = mock_provider
 
         from routers.chat import router
         from fastapi import FastAPI
@@ -349,20 +413,45 @@ class TestInvocationsEndpoint:
         response = client.post(
             "/invocations",
             json={
-                "input": {
+                "thread_id": "test-session",
+                "run_id": str(uuid.uuid4()),
+                "state": {"action": "stop", "user_id": "test-user"}
+            }
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "stop_requested"
+        assert data["session_id"] == "test-session"
+
+    @patch('routers.chat.get_bridge')
+    def test_elicitation_complete(self, mock_get_bridge):
+        """Test elicitation_complete action signals bridge."""
+        mock_bridge = MagicMock()
+        mock_get_bridge.return_value = mock_bridge
+
+        from routers.chat import router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        response = client.post(
+            "/invocations",
+            json={
+                "thread_id": "test-session",
+                "run_id": str(uuid.uuid4()),
+                "state": {
+                    "action": "elicitation_complete",
                     "user_id": "test-user",
-                    "session_id": "test",
-                    "message": "Analyze this",
-                    "files": [{
-                        "filename": "test.png",
-                        "content_type": "image/png",
-                        "bytes": "base64data"
-                    }]
+                    "elicitation_id": "elic-123"
                 }
             }
         )
 
         assert response.status_code == 200
+        assert response.json() == {"status": "elicitation_completed"}
 
 
 # ============================================================
@@ -395,7 +484,7 @@ class TestInterruptResponseHandling:
         app.include_router(router)
         client = TestClient(app)
 
-        # Frontend sends interrupt response as JSON array
+        # Frontend sends interrupt response as JSON array in the message
         interrupt_message = json.dumps([{
             "interruptResponse": {
                 "interruptId": "interrupt-123",
@@ -405,17 +494,10 @@ class TestInterruptResponseHandling:
 
         response = client.post(
             "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "test",
-                    "message": interrupt_message
-                }
-            }
+            json=_agui_payload(message=interrupt_message)
         )
 
         assert response.status_code == 200
-        # Response 200 confirms agent stream was invoked successfully
 
     @patch('routers.chat.create_agent')
     def test_handles_normal_message_not_json(self, mock_factory, mock_agent):
@@ -431,13 +513,7 @@ class TestInterruptResponseHandling:
 
         response = client.post(
             "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "test",
-                    "message": "Just a normal message"
-                }
-            }
+            json=_agui_payload(message="Just a normal message")
         )
 
         assert response.status_code == 200
@@ -454,16 +530,9 @@ class TestInterruptResponseHandling:
         app.include_router(router)
         client = TestClient(app)
 
-        # JSON that's not an interrupt response
         response = client.post(
             "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "test",
-                    "message": json.dumps({"data": "something"})
-                }
-            }
+            json=_agui_payload(message=json.dumps({"data": "something"}))
         )
 
         assert response.status_code == 200
@@ -490,34 +559,11 @@ class TestInvocationsErrorHandling:
 
         response = client.post(
             "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "test",
-                    "message": "Test"
-                }
-            }
+            json=_agui_payload()
         )
 
         assert response.status_code == 500
         assert "Agent processing failed" in response.json()["detail"]
-
-    def test_returns_422_on_invalid_request(self):
-        """Test that 422 is returned for invalid request format."""
-        from routers.chat import router
-        from fastapi import FastAPI
-
-        app = FastAPI()
-        app.include_router(router)
-        client = TestClient(app)
-
-        # Missing required fields
-        response = client.post(
-            "/invocations",
-            json={"input": {}}
-        )
-
-        assert response.status_code == 422
 
 
 # ============================================================
@@ -552,14 +598,7 @@ class TestModelConfiguration:
 
         client.post(
             "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "test",
-                    "message": "Test",
-                    "model_id": "claude-3-opus"
-                }
-            }
+            json=_agui_payload(model_id="claude-3-opus")
         )
 
         call_kwargs = mock_factory.call_args.kwargs
@@ -579,14 +618,7 @@ class TestModelConfiguration:
 
         client.post(
             "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "test",
-                    "message": "Test",
-                    "temperature": 0.3
-                }
-            }
+            json=_agui_payload(temperature=0.3)
         )
 
         call_kwargs = mock_factory.call_args.kwargs
@@ -606,14 +638,7 @@ class TestModelConfiguration:
 
         client.post(
             "/invocations",
-            json={
-                "input": {
-                    "user_id": "test-user",
-                    "session_id": "test",
-                    "message": "Test",
-                    "system_prompt": "You are a coding assistant."
-                }
-            }
+            json=_agui_payload(system_prompt="You are a coding assistant.")
         )
 
         call_kwargs = mock_factory.call_args.kwargs

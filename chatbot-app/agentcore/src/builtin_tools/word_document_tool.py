@@ -828,7 +828,8 @@ def list_my_word_documents(
 @tool(context=True)
 def read_word_document(
     document_name: str,
-    tool_context: ToolContext
+    tool_context: ToolContext,
+    include_comments: bool = False
 ) -> Dict[str, Any]:
     """Read and retrieve a specific Word document.
 
@@ -840,6 +841,7 @@ def read_word_document(
     - User wants to analyze the document: "How many tables are in this file?", "What's the main topic?"
     - User explicitly requests download: "Send me [filename]", "I need [document]"
     - You need to verify document contents before modification
+    - User asks about comments/reviews: "What comments are in this doc?", "Show me the review feedback"
 
     IMPORTANT:
     - For creating new documents: use create_word_document
@@ -849,9 +851,13 @@ def read_word_document(
         document_name: Document name WITHOUT extension (.docx is added automatically)
                       Must exist in workspace.
                       Example: "report", "proposal", "Q4-analysis"
+        include_comments: If True, extract and display comments with their locations.
+                         Each comment shows: author, date, text, and which paragraph it's attached to.
+                         Default: False
 
     Returns:
         - Extracted text content (paragraphs, tables, headings)
+        - If include_comments=True: comments with paragraph mapping
         - Document metadata (filename, size, S3 location)
         - Frontend shows download button based on metadata
 
@@ -860,10 +866,9 @@ def read_word_document(
         User: "Send me the report"
         AI: read_word_document("report.docx")
 
-        # After creation
-        User: "Create report and send it"
-        AI: create_word_document(...)
-        AI: read_word_document("report.docx")
+        # Read with comments
+        User: "Show me the comments in the report"
+        AI: read_word_document("report", include_comments=True)
 
     Note:
         - File must exist in workspace
@@ -909,6 +914,63 @@ def read_word_document(
             doc_manager.upload_to_code_interpreter(code_interpreter, document_filename, file_bytes)
 
             # Generate extraction code
+            comments_block = ""
+            if include_comments:
+                comments_block = f'''
+# Extract comments via zipfile (more reliable than python-docx rels API)
+import zipfile
+from lxml import etree
+
+W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+W_NS = '{{}}'.format(W)
+
+comments_map = {{}}
+try:
+    with zipfile.ZipFile("{document_filename}", 'r') as z:
+        if 'word/comments.xml' in z.namelist():
+            with z.open('word/comments.xml') as f:
+                croot = etree.parse(f).getroot()
+            for c in croot.findall('.//{{' + W + '}}comment'):
+                cid = c.get('{{' + W + '}}id')
+                author = c.get('{{' + W + '}}author', '')
+                date = c.get('{{' + W + '}}date', '')
+                texts = []
+                for t in c.findall('.//{{' + W + '}}t'):
+                    if t.text:
+                        texts.append(t.text)
+                comments_map[cid] = {{
+                    "id": cid,
+                    "author": author,
+                    "date": date,
+                    "text": ''.join(texts),
+                }}
+except Exception as e:
+    pass
+
+# Map comment IDs to paragraph indices via commentRangeStart in document body
+comment_to_para = {{}}
+body = doc.element.body
+W_TAG = '{{' + W + '}}'
+para_elements = body.findall(W_TAG + 'p')
+for para_idx, p_elem in enumerate(para_elements):
+    for marker in p_elem.iter(W_TAG + 'commentRangeStart'):
+        cid = marker.get(W_TAG + 'id')
+        if cid:
+            comment_to_para[cid] = para_idx
+
+# Build comments list with paragraph context
+result["comments"] = []
+for cid, info in comments_map.items():
+    entry = dict(info)
+    entry["paragraph_index"] = comment_to_para.get(cid)
+    pidx = comment_to_para.get(cid)
+    if pidx is not None and pidx < len(doc.paragraphs):
+        ptext = doc.paragraphs[pidx].text
+        entry["paragraph_text"] = ptext[:100] + ("..." if len(ptext) > 100 else "")
+    result["comments"].append(entry)
+result["properties"]["comments_count"] = len(comments_map)
+'''
+
             extraction_code = f'''
 import json
 from docx import Document
@@ -947,6 +1009,8 @@ result["properties"] = {{
     "paragraphs_count": len(doc.paragraphs),
     "tables_count": len(doc.tables)
 }}
+
+{comments_block}
 
 print(json.dumps(result, ensure_ascii=False))
 '''
@@ -1012,9 +1076,31 @@ print(json.dumps(result, ensure_ascii=False))
                         output_parts.append(" | ".join(["---"] * len(row)))
                 output_parts.append("")
 
+            # Format comments if present
+            comments = doc_content.get("comments", [])
+            if comments:
+                output_parts.append("---")
+                output_parts.append(f"**Comments ({len(comments)})**")
+                output_parts.append("")
+                for c in comments:
+                    para_idx = c.get("paragraph_index")
+                    para_text = c.get("paragraph_text", "")
+                    location = f"paragraph {para_idx}" if para_idx is not None else "unlinked"
+                    date_str = c.get("date", "")[:10] if c.get("date") else ""
+                    output_parts.append(f"- **[{c.get('id')}]** {c.get('author', 'Unknown')}{' (' + date_str + ')' if date_str else ''}: {c.get('text', '')}")
+                    if para_text:
+                        output_parts.append(f"  > *on {location}*: \"{para_text}\"")
+                    output_parts.append("")
+
             # Add summary
             props = doc_content.get("properties", {})
-            output_parts.append(f"---\n*{props.get('paragraphs_count', 0)} paragraphs, {props.get('tables_count', 0)} tables*")
+            summary_parts = [
+                f"{props.get('paragraphs_count', 0)} paragraphs",
+                f"{props.get('tables_count', 0)} tables",
+            ]
+            if props.get("comments_count"):
+                summary_parts.append(f"{props['comments_count']} comments")
+            output_parts.append(f"---\n*{', '.join(summary_parts)}*")
             output_parts.append(f"*Last Modified: {doc_info['last_modified'].split('T')[0]}*")
 
             output_text = "\n".join(output_parts)

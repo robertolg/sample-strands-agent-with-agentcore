@@ -60,13 +60,17 @@ export async function POST(request: NextRequest) {
 
     console.log(`[Elicitation] Complete signal for session=${sessionId}, elicitationId=${elicitationId}`)
 
+    // AG-UI format elicitation complete payload
     const payload = {
-      input: {
+      thread_id: sessionId,
+      run_id: crypto.randomUUID(),
+      messages: [],
+      tools: [],
+      context: [],
+      state: {
         user_id: userId,
-        session_id: sessionId,
         action: 'elicitation_complete',
-        elicitation_id: elicitationId || null,
-        message: ''
+        elicitation_id: elicitationId || null
       }
     }
 

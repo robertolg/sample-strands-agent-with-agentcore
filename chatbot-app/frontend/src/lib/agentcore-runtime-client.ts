@@ -2,6 +2,8 @@
  * AgentCore Client - Supports both local and AWS deployment
  * - Local: HTTP POST to localhost:8080
  * - AWS: Bedrock AgentCore Runtime via AWS SDK
+ *
+ * All payloads use AG-UI format (thread_id, run_id, messages, tools, state).
  */
 
 // Check if running in local development mode
@@ -67,12 +69,12 @@ async function getAgentCoreRuntimeArn(): Promise<string> {
     const response = await ssmClient.send(command)
 
     if (response.Parameter?.Value) {
-      console.log('[AgentCore] ✅ Runtime ARN loaded from Parameter Store')
+      console.log('[AgentCore] Runtime ARN loaded from Parameter Store')
       cachedRuntimeArn = response.Parameter.Value
       return response.Parameter.Value
     }
   } catch (error) {
-    console.warn('[AgentCore] ⚠️ Failed to load from Parameter Store:', error)
+    console.warn('[AgentCore] Failed to load from Parameter Store:', error)
   }
 
   throw new Error(
@@ -81,96 +83,14 @@ async function getAgentCoreRuntimeArn(): Promise<string> {
 }
 
 /**
- * Invoke local AgentCore via HTTP POST
+ * Invoke local AgentCore via HTTP POST (AG-UI body pass-through)
  */
 async function invokeLocalAgentCore(
-  userId: string,
-  sessionId: string,
-  message: string,
-  modelId?: string,
-  enabledTools?: string[],
-  files?: any[],
-  temperature?: number,
-  systemPrompt?: string,
-  cachingEnabled?: boolean,
-  abortSignal?: AbortSignal,
-  requestType?: string,
-  selectedArtifactId?: string,
-  apiKeys?: Record<string, string>,
-  authToken?: string
+  aguiBody: Record<string, any>,
+  abortSignal?: AbortSignal
 ): Promise<ReadableStream> {
-  console.log('[AgentCore] 🚀 Invoking LOCAL AgentCore via HTTP POST')
+  console.log('[AgentCore] Invoking LOCAL AgentCore via HTTP POST')
   console.log(`[AgentCore]    URL: ${AGENTCORE_URL}/invocations`)
-  console.log(`[AgentCore]    User: ${userId}, Session: ${sessionId}`)
-
-  const inputData: Record<string, any> = {
-    user_id: userId,
-    session_id: sessionId,
-    message: message,
-  }
-
-  if (modelId) {
-    inputData.model_id = modelId
-  }
-
-  if (temperature !== undefined) {
-    inputData.temperature = temperature
-  }
-
-  if (systemPrompt) {
-    inputData.system_prompt = systemPrompt
-  }
-
-  if (cachingEnabled !== undefined) {
-    inputData.caching_enabled = cachingEnabled
-  }
-
-  // Always include enabled_tools (even if empty) to avoid Bedrock toolConfig validation errors
-  if (enabledTools !== undefined) {
-    inputData.enabled_tools = enabledTools
-    console.log(`[AgentCore]    Enabled tools (${enabledTools.length}):`, enabledTools)
-  }
-
-  if (files && files.length > 0) {
-    inputData.files = files
-    console.log(`[AgentCore]    Files (${files.length}):`, files.map((f: any) => f.filename))
-  }
-
-  if (requestType) {
-    inputData.request_type = requestType
-    console.log(`[AgentCore]    Request type: ${requestType}`)
-  }
-
-  if (selectedArtifactId) {
-    inputData.selected_artifact_id = selectedArtifactId
-    console.log(`[AgentCore]    Selected artifact: ${selectedArtifactId}`)
-  }
-
-  if (apiKeys && Object.keys(apiKeys).length > 0) {
-    inputData.api_keys = apiKeys
-    console.log(`[AgentCore]    API keys provided: ${Object.keys(apiKeys).join(', ')}`)
-  }
-
-  if (authToken) {
-    inputData.auth_token = authToken
-  }
-
-  const payload = { input: inputData }
-
-  // Log payload without bytes, api_keys, auth_token (security)
-  const payloadForLog = {
-    input: {
-      ...inputData,
-      files: files?.map((f: any) => ({
-        filename: f.filename,
-        content_type: f.content_type,
-        bytes: `<base64 data ${f.bytes?.length || 0} chars>`
-      })),
-      api_keys: apiKeys ? `<${Object.keys(apiKeys).length} keys>` : undefined,
-      auth_token: authToken ? '<present>' : undefined
-    }
-  }
-  console.log('[AgentCore]    Payload:', JSON.stringify(payloadForLog, null, 2))
 
   const response = await fetch(`${AGENTCORE_URL}/invocations`, {
     method: 'POST',
@@ -178,8 +98,8 @@ async function invokeLocalAgentCore(
       'Content-Type': 'application/json',
       'Accept': 'text/event-stream',
     },
-    body: JSON.stringify(payload),
-    signal: abortSignal, // Pass abort signal for cancellation
+    body: JSON.stringify(aguiBody),
+    signal: abortSignal,
   })
 
   if (!response.ok) {
@@ -187,8 +107,7 @@ async function invokeLocalAgentCore(
     throw new Error(`AgentCore returned ${response.status}: ${errorText}`)
   }
 
-  console.log('[AgentCore] ✅ Local Runtime invoked successfully')
-  console.log(`[AgentCore]    Status: ${response.status}`)
+  console.log('[AgentCore] Local Runtime invoked successfully')
 
   if (!response.body) {
     throw new Error('No response stream received from AgentCore')
@@ -198,113 +117,34 @@ async function invokeLocalAgentCore(
 }
 
 /**
- * Invoke AWS Bedrock AgentCore Runtime
+ * Invoke AWS Bedrock AgentCore Runtime (AG-UI body pass-through)
  */
 async function invokeAwsAgentCore(
+  aguiBody: Record<string, any>,
   userId: string,
   sessionId: string,
-  message: string,
-  modelId?: string,
-  enabledTools?: string[],
-  files?: any[],
-  temperature?: number,
-  systemPrompt?: string,
-  cachingEnabled?: boolean,
-  abortSignal?: AbortSignal,
-  requestType?: string,
-  selectedArtifactId?: string,
-  apiKeys?: Record<string, string>,
-  authToken?: string
+  abortSignal?: AbortSignal
 ): Promise<ReadableStream> {
   await initializeAwsClients()
   const runtimeArn = await getAgentCoreRuntimeArn()
 
-  console.log('[AgentCore] 🚀 Invoking AWS Bedrock AgentCore Runtime')
+  console.log('[AgentCore] Invoking AWS Bedrock AgentCore Runtime')
   console.log(`[AgentCore]    User: ${userId}, Session: ${sessionId}`)
   console.log(`[AgentCore]    ARN: ${runtimeArn}`)
-
-  const inputData: Record<string, any> = {
-    user_id: userId,
-    session_id: sessionId,
-    message: message,
-  }
-
-  if (modelId) {
-    inputData.model_id = modelId
-  }
-
-  if (temperature !== undefined) {
-    inputData.temperature = temperature
-  }
-
-  if (systemPrompt) {
-    inputData.system_prompt = systemPrompt
-  }
-
-  if (cachingEnabled !== undefined) {
-    inputData.caching_enabled = cachingEnabled
-  }
-
-  // Always include enabled_tools (even if empty) to avoid Bedrock toolConfig validation errors
-  if (enabledTools !== undefined) {
-    inputData.enabled_tools = enabledTools
-    console.log(`[AgentCore]    Enabled tools (${enabledTools.length}):`, enabledTools)
-  }
-
-  if (files && files.length > 0) {
-    inputData.files = files
-    console.log(`[AgentCore]    Files (${files.length}):`, files.map((f: any) => f.filename))
-  }
-
-  if (requestType) {
-    inputData.request_type = requestType
-    console.log(`[AgentCore]    Request type: ${requestType}`)
-  }
-
-  if (selectedArtifactId) {
-    inputData.selected_artifact_id = selectedArtifactId
-    console.log(`[AgentCore]    Selected artifact: ${selectedArtifactId}`)
-  }
-
-  if (apiKeys && Object.keys(apiKeys).length > 0) {
-    inputData.api_keys = apiKeys
-    console.log(`[AgentCore]    API keys provided: ${Object.keys(apiKeys).join(', ')}`)
-  }
-
-  if (authToken) {
-    inputData.auth_token = authToken
-  }
-
-  const payload = { input: inputData }
-
-  // Log payload without bytes, api_keys, auth_token (security)
-  const payloadForLog = {
-    input: {
-      ...inputData,
-      files: files?.map((f: any) => ({
-        filename: f.filename,
-        content_type: f.content_type,
-        bytes: `<base64 data ${f.bytes?.length || 0} chars>`
-      })),
-      api_keys: apiKeys ? `<${Object.keys(apiKeys).length} keys>` : undefined,
-      auth_token: authToken ? '<present>' : undefined
-    }
-  }
-  console.log('[AgentCore]    Payload:', JSON.stringify(payloadForLog, null, 2))
 
   const command = new InvokeAgentRuntimeCommand({
     agentRuntimeArn: runtimeArn,
     qualifier: 'DEFAULT',
     contentType: 'application/json',
     accept: 'text/event-stream',
-    payload: Buffer.from(JSON.stringify(payload)),
+    payload: Buffer.from(JSON.stringify(aguiBody)),
     runtimeUserId: userId,
     runtimeSessionId: sessionId,
   })
 
   const response = await agentCoreClient.send(command)
 
-  console.log('[AgentCore] ✅ AWS Runtime invoked successfully')
+  console.log('[AgentCore] AWS Runtime invoked successfully')
   console.log(`[AgentCore]    Trace ID: ${response.traceId}`)
   console.log(`[AgentCore]    Status Code: ${response.statusCode}`)
 
@@ -403,128 +243,26 @@ async function invokeAwsAgentCore(
   })
 }
 
-/**
- * Invoke AgentCore with AG-UI RunAgentInput format (snake_case body sent directly)
- * Used when the frontend sends a RunAgentInput so the backend uses AGUIStreamEventProcessor.
- */
-export async function invokeAgentCoreRuntimeAgui(
-  aguiBody: Record<string, any>,
-  abortSignal?: AbortSignal,
-): Promise<ReadableStream> {
-  try {
-    if (IS_LOCAL) {
-      console.log('[AgentCore] 🚀 Invoking LOCAL AgentCore via AG-UI HTTP POST')
-      const response = await fetch(`${AGENTCORE_URL}/invocations`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-        },
-        body: JSON.stringify(aguiBody),
-        signal: abortSignal,
-      })
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`AgentCore returned ${response.status}: ${errorText}`)
-      }
-      if (!response.body) throw new Error('No response stream received from AgentCore')
-      return response.body
-    } else {
-      await initializeAwsClients()
-      const runtimeArn = await getAgentCoreRuntimeArn()
-      const threadId = aguiBody.thread_id
-      const userId = aguiBody.state?.user_id || 'agui'
-
-      console.log('[AgentCore] 🚀 Invoking AWS Bedrock AgentCore Runtime (AG-UI)')
-      const command = new InvokeAgentRuntimeCommand({
-        agentRuntimeArn: runtimeArn,
-        qualifier: 'DEFAULT',
-        contentType: 'application/json',
-        accept: 'text/event-stream',
-        payload: Buffer.from(JSON.stringify(aguiBody)),
-        runtimeUserId: userId,
-        runtimeSessionId: threadId,
-      })
-
-      const response = await agentCoreClient.send(command)
-      if (!response.response) throw new Error('No response stream received from AgentCore Runtime')
-
-      const sdkStream = response.response
-      let aborted = false
-      if (abortSignal) {
-        abortSignal.addEventListener('abort', () => { aborted = true })
-      }
-
-      if (typeof (sdkStream as any).pipe === 'function') {
-        const nodeStream = sdkStream as any
-        return new ReadableStream({
-          start(controller) {
-            if (abortSignal) {
-              abortSignal.addEventListener('abort', () => {
-                nodeStream.destroy()
-                try { controller.close() } catch (_) {}
-              })
-            }
-            nodeStream.on('data', (chunk: Uint8Array) => controller.enqueue(chunk))
-            nodeStream.on('end', () => controller.close())
-            nodeStream.on('error', (error: Error) => controller.error(error))
-          },
-          cancel() { nodeStream.destroy() }
-        })
-      }
-
-      return new ReadableStream({
-        async start(controller) {
-          try {
-            for await (const chunk of sdkStream as any) {
-              if (aborted) break
-              if (chunk) controller.enqueue(chunk)
-            }
-            controller.close()
-          } catch (error) {
-            if (aborted) { try { controller.close() } catch (_) {} }
-            else controller.error(error)
-          }
-        },
-        cancel() { aborted = true }
-      })
-    }
-  } catch (error) {
-    console.error('[AgentCore] ❌ Failed to invoke Runtime (AG-UI):', error)
-    throw new Error(
-      `Failed to invoke AgentCore Runtime: ${error instanceof Error ? error.message : 'Unknown error'}`
-    )
-  }
-}
 
 /**
- * Invoke AgentCore and stream the response
- * Automatically uses local or AWS based on configuration
+ * Invoke AgentCore and stream the response.
+ * Accepts an AG-UI body object which is passed through to the backend.
+ * userId/sessionId are used only for AWS SDK session affinity.
  */
 export async function invokeAgentCoreRuntime(
+  aguiBody: Record<string, any>,
   userId: string,
   sessionId: string,
-  message: string,
-  modelId?: string,
-  enabledTools?: string[],
-  files?: any[],
-  temperature?: number,
-  systemPrompt?: string,
-  cachingEnabled?: boolean,
-  abortSignal?: AbortSignal,
-  requestType?: string,
-  selectedArtifactId?: string,
-  apiKeys?: Record<string, string>,
-  authToken?: string
+  abortSignal?: AbortSignal
 ): Promise<ReadableStream> {
   try {
     if (IS_LOCAL) {
-      return await invokeLocalAgentCore(userId, sessionId, message, modelId, enabledTools, files, temperature, systemPrompt, cachingEnabled, abortSignal, requestType, selectedArtifactId, apiKeys, authToken)
+      return await invokeLocalAgentCore(aguiBody, abortSignal)
     } else {
-      return await invokeAwsAgentCore(userId, sessionId, message, modelId, enabledTools, files, temperature, systemPrompt, cachingEnabled, abortSignal, requestType, selectedArtifactId, apiKeys, authToken)
+      return await invokeAwsAgentCore(aguiBody, userId, sessionId, abortSignal)
     }
   } catch (error) {
-    console.error('[AgentCore] ❌ Failed to invoke Runtime:', error)
+    console.error('[AgentCore] Failed to invoke Runtime:', error)
     throw new Error(
       `Failed to invoke AgentCore Runtime: ${error instanceof Error ? error.message : 'Unknown error'}`
     )
@@ -560,12 +298,12 @@ export async function pingAgentCoreRuntime(sessionId?: string, userId?: string):
     console.log(`[AgentCore Warmup] Invoking with sessionId=${warmupSessionId}, userId=${warmupUserId}`)
 
     const payload = {
-      input: {
-        user_id: warmupUserId,
-        session_id: warmupSessionId,
-        message: '',
-        warmup: true
-      }
+      thread_id: warmupSessionId,
+      run_id: crypto.randomUUID(),
+      messages: [],
+      tools: [],
+      context: [],
+      state: { action: 'warmup', user_id: warmupUserId }
     }
 
     const command = new InvokeAgentRuntimeCommand({

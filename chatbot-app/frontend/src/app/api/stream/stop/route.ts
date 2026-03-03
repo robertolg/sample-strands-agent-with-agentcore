@@ -71,18 +71,18 @@ export async function POST(request: NextRequest) {
 
     console.log(`[StopSignal] Setting stop signal for user=${userId}, session=${sessionId}`)
 
-    // Prepare stop action payload
+    // AG-UI format stop payload
     const payload = {
-      input: {
-        user_id: userId,
-        session_id: sessionId,
-        action: 'stop',
-        message: ''
-      }
+      thread_id: sessionId,
+      run_id: crypto.randomUUID(),
+      messages: [],
+      tools: [],
+      context: [],
+      state: { user_id: userId, action: 'stop' }
     }
 
     if (IS_LOCAL) {
-      // Local mode: Call local AgentCore /invocations with action=stop
+      // Local mode: Call local AgentCore /invocations with AG-UI stop action
       const response = await fetch(`${AGENTCORE_URL}/invocations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
       const result = await response.json()
       console.log(`[StopSignal] Local stop signal set successfully:`, result)
     } else {
-      // Cloud mode: Call AgentCore Runtime via Bedrock SDK with action=stop
+      // Cloud mode: Call AgentCore Runtime via Bedrock SDK with AG-UI stop action
       const { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } = await import('@aws-sdk/client-bedrock-agentcore')
       const agentCoreClient = new BedrockAgentCoreClient({ region: AWS_REGION })
       const runtimeArn = await getAgentCoreRuntimeArn()

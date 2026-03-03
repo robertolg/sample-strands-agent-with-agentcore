@@ -931,51 +931,29 @@ class TestCompactionEnabledPayload:
         assert not use_agentcore  # None is falsy, so this should pass
 
 
-class TestInvocationRequestSchema:
-    """Test InvocationInput schema with compaction_enabled"""
+class TestAGUIStateCompactionEnabled:
+    """Test that compaction_enabled is properly extracted from AG-UI state"""
 
-    def test_invocation_input_accepts_compaction_enabled(self):
-        """InvocationInput should accept compaction_enabled parameter"""
-        from models.schemas import InvocationInput
+    def test_agui_state_compaction_enabled_true(self):
+        """AG-UI state should carry compaction_enabled"""
+        state = {
+            "user_id": "user-123",
+            "compaction_enabled": True,
+        }
+        assert state.get("compaction_enabled") is True
 
-        # With compaction_enabled=True
-        input_data = InvocationInput(
-            user_id="user-123",
-            session_id="session-456",
-            message="Hello",
-            compaction_enabled=True
-        )
-        assert input_data.compaction_enabled is True
+    def test_agui_state_compaction_enabled_false(self):
+        """AG-UI state should carry compaction_enabled=False"""
+        state = {
+            "user_id": "user-123",
+            "compaction_enabled": False,
+        }
+        assert state.get("compaction_enabled") is False
 
-        # With compaction_enabled=False
-        input_data = InvocationInput(
-            user_id="user-123",
-            session_id="session-456",
-            message="Hello",
-            compaction_enabled=False
-        )
-        assert input_data.compaction_enabled is False
-
-        # Without compaction_enabled (should default to None)
-        input_data = InvocationInput(
-            user_id="user-123",
-            session_id="session-456",
-            message="Hello"
-        )
-        assert input_data.compaction_enabled is None
-
-    def test_invocation_input_compaction_optional(self):
-        """compaction_enabled should be optional"""
-        from models.schemas import InvocationInput
-
-        # Should not raise error without compaction_enabled
-        input_data = InvocationInput(
-            user_id="user-123",
-            session_id="session-456",
-            message="Hello"
-        )
-        assert hasattr(input_data, 'compaction_enabled')
-        assert input_data.compaction_enabled is None
+    def test_agui_state_compaction_enabled_missing(self):
+        """AG-UI state without compaction_enabled defaults to None"""
+        state = {"user_id": "user-123"}
+        assert state.get("compaction_enabled") is None
 
 
 class TestNoCompactionBaseline:

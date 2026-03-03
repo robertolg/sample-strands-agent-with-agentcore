@@ -3,7 +3,7 @@
  * Invokes AgentCore Runtime and streams responses
  */
 import { NextRequest } from 'next/server'
-import { invokeAgentCoreRuntime, invokeAgentCoreRuntimeAgui } from '@/lib/agentcore-runtime-client'
+import { invokeAgentCoreRuntime } from '@/lib/agentcore-runtime-client'
 import { extractUserFromRequest, getSessionId, ensureSessionExists } from '@/lib/auth-utils'
 import { createDefaultHookManager } from '@/lib/chat-hooks'
 import { getSystemPrompt } from '@/lib/system-prompts'
@@ -527,52 +527,64 @@ export async function POST(request: NextRequest) {
             finalSystemPrompt = `${modelConfig.system_prompt}\n\n${system_prompt}`
           }
 
-          let agentStream: ReadableStream
-          if (threadIdFromBody) {
-            // AG-UI path: pass original messages (may contain multimodal content parts)
-            // Apply server-side image resize for any base64 images exceeding 5MB
-            const messagesForBackend = aguiMessages && aguiMessages.length > 0
-              ? aguiMessages
-              : [{ id: crypto.randomUUID(), role: 'user', content: message }]
-
-            await processAguiMessagesImages(messagesForBackend)
-
-            const aguiBody: Record<string, any> = {
-              thread_id: threadIdFromBody,
-              run_id: runIdFromBody || crypto.randomUUID(),
-              messages: messagesForBackend,
-              tools: enabledToolsList.map(name => ({ name, description: '' })),
-              context: [],
-              state: {
-                user_id: userId,
-                model_id: modelConfig.model_id,
-                temperature: modelConfig.temperature,
-                system_prompt: finalSystemPrompt,
-                caching_enabled: modelConfig.caching_enabled,
-                ...(request_type && { request_type }),
-                ...(selected_artifact_id && { selected_artifact_id }),
-                ...(authToken && { auth_token: authToken }),
-              },
-            }
-            agentStream = await invokeAgentCoreRuntimeAgui(aguiBody, agentCoreAbortController.signal)
-          } else {
-            agentStream = await invokeAgentCoreRuntime(
-              userId,
-              sessionId,
-              message,
-              modelConfig.model_id,
-              enabledToolsList.length > 0 ? enabledToolsList : undefined,
-              files,
-              modelConfig.temperature,
-              finalSystemPrompt,
-              modelConfig.caching_enabled,
-              agentCoreAbortController.signal,
-              request_type,
-              selected_artifact_id,
-              userApiKeys,
-              authToken
-            )
+          // Process inline images in AG-UI messages (resize if needed)
+          if (threadIdFromBody && aguiMessages && aguiMessages.length > 0) {
+            await processAguiMessagesImages(aguiMessages)
           }
+
+          // Build AG-UI body with server-side config enriched into state
+          const enrichedState: Record<string, any> = {
+            ...((aguiMessages ? {} : {}) as Record<string, any>),
+            user_id: userId,
+            model_id: modelConfig.model_id,
+            temperature: modelConfig.temperature,
+            system_prompt: finalSystemPrompt,
+            caching_enabled: modelConfig.caching_enabled,
+            ...(userApiKeys && { api_keys: userApiKeys }),
+            ...(authToken && { auth_token: authToken }),
+            ...(selected_artifact_id && { selected_artifact_id }),
+            ...(request_type && { request_type }),
+          }
+
+          // enabled_tools as AG-UI tools array
+          const aguiTools = enabledToolsList.map(id => ({ name: id, description: '' }))
+
+          // Build messages: use AG-UI messages if available, otherwise construct from text + files
+          let finalMessages: any[]
+          if (aguiMessages && aguiMessages.length > 0) {
+            finalMessages = aguiMessages
+          } else {
+            // FormData path: construct AG-UI messages with binary content parts
+            const contentParts: any[] = [{ type: 'text', text: message }]
+            if (files && files.length > 0) {
+              for (const f of files as any[]) {
+                contentParts.push({
+                  type: 'binary',
+                  mime_type: f.content_type,
+                  data: f.bytes,
+                  filename: f.filename,
+                })
+              }
+            }
+            finalMessages = [{
+              id: crypto.randomUUID(),
+              role: 'user',
+              content: contentParts,
+            }]
+          }
+
+          const aguiBody = {
+            thread_id: sessionId,
+            run_id: runIdFromBody || crypto.randomUUID(),
+            messages: finalMessages,
+            tools: aguiTools,
+            context: [],
+            state: enrichedState,
+          }
+
+          const agentStream = await invokeAgentCoreRuntime(
+            aguiBody, userId, sessionId, agentCoreAbortController.signal
+          )
           agentStarted = true
 
           // Read from AgentCore stream, buffer events, and forward to client

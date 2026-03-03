@@ -56,10 +56,8 @@ class TestFilenameValidation:
         ctx.invocation_state = {"user_id": "u1", "session_id": "s1"}
         return ctx
 
-    @patch("builtin_tools.diagram_tool._get_code_interpreter_id", return_value="ci-123")
-    def test_generate_chart_rejects_pdf(self, _mock_ci):
-        """generate_chart docstring says PNG only, but _execute_code_interpreter accepts .png/.pdf."""
-        # The shared executor accepts .png and .pdf — this just validates the flow
+    def test_generate_chart_rejects_pdf(self):
+        """_execute_code_interpreter rejects filenames that are not .png or .pdf."""
         from builtin_tools.diagram_tool import _execute_code_interpreter
         ctx = self._make_tool_context()
         result = _execute_code_interpreter("code", "bad.txt", ctx, "generate_chart")
@@ -73,20 +71,20 @@ class TestFilenameValidation:
         assert result["status"] == "error"
 
     def test_png_filename_accepted_format(self):
-        """A .png filename should pass the extension check (will fail later at CI init)."""
+        """A .png filename passes the extension check; fails later at CI unavailable."""
         from builtin_tools.diagram_tool import _execute_code_interpreter
         ctx = self._make_tool_context()
-        with patch("builtin_tools.diagram_tool._get_code_interpreter_id", return_value=None):
+        with patch("builtin_tools.code_interpreter_tool.get_ci_session", return_value=None):
             result = _execute_code_interpreter("code", "chart.png", ctx, "generate_chart")
-        # Fails at "Code Interpreter ID not found" — but NOT at filename validation
+        # Fails at "Code Interpreter not configured" — but NOT at filename validation
         assert "Invalid filename" not in result["content"][0]["text"]
-        assert "Code Interpreter ID not found" in result["content"][0]["text"]
+        assert "Code Interpreter not configured" in result["content"][0]["text"]
 
     def test_pdf_filename_accepted_format(self):
-        """A .pdf filename should pass the extension check."""
+        """A .pdf filename passes the extension check; fails later at CI unavailable."""
         from builtin_tools.diagram_tool import _execute_code_interpreter
         ctx = self._make_tool_context()
-        with patch("builtin_tools.diagram_tool._get_code_interpreter_id", return_value=None):
+        with patch("builtin_tools.code_interpreter_tool.get_ci_session", return_value=None):
             result = _execute_code_interpreter("code", "poster.pdf", ctx, "create_visual_design")
         assert "Invalid filename" not in result["content"][0]["text"]
 
@@ -99,13 +97,13 @@ class TestNoCodeInterpreterFallback:
         ctx = MagicMock()
         ctx.invocation_state = {"user_id": "u1", "session_id": "s1"}
 
-        with patch("builtin_tools.diagram_tool._get_code_interpreter_id", return_value=None):
+        with patch("builtin_tools.code_interpreter_tool.get_ci_session", return_value=None):
             result = _execute_code_interpreter(
                 "import matplotlib", "chart.png", ctx, "generate_chart"
             )
 
         assert result["status"] == "error"
-        assert "Code Interpreter ID not found" in result["content"][0]["text"]
+        assert "Code Interpreter not configured" in result["content"][0]["text"]
 
 
 class TestSwarmToolMapping:

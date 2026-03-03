@@ -12,7 +12,7 @@ description: Create, modify, and manage Word documents.
 | `create_word_document` | User asks to create/generate a NEW Word document |
 | `modify_word_document` | User asks to edit/update an EXISTING document or add content |
 | `list_my_word_documents` | User asks what documents are available |
-| `read_word_document` | User wants to download a document |
+| `read_word_document` | User wants to download a document or read its comments |
 | `preview_word_page` | Check actual page appearance (charts, images, complex layouts) |
 
 ## Workflow
@@ -106,11 +106,12 @@ Example tool_input:
 List all Word documents in workspace. No parameters needed.
 
 ### read_word_document
-Retrieve a specific document for download.
+Read document content. With `include_comments=True`, also shows all comments with author, date, text, and which paragraph they're attached to.
 
-| Parameter | Type | Required |
-|-----------|------|----------|
-| `document_name` | str | Yes |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `document_name` | str | Yes | Document name without extension |
+| `include_comments` | bool | No | If true, extract and display comments with paragraph mapping (default: false) |
 
 ### preview_word_page
 Get page screenshots for visual inspection before editing.
