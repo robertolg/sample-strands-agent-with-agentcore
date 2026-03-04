@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Copy, ThumbsUp, ThumbsDown, Check, FileText, Download, FileSpreadsheet, Presentation, AudioWaveform, Sparkles } from 'lucide-react'
+import { Copy, ThumbsUp, ThumbsDown, Check, AudioWaveform, Sparkles } from 'lucide-react'
 import { AIIcon } from '@/components/ui/AIIcon'
 import { Message } from '@/types/chat'
 import { ReasoningState } from '@/types/events'
@@ -80,25 +80,7 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
   const [copied, setCopied] = useState(false)
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(initialFeedback)
 
-  // Get file icon and color based on extension
-  const getFileIcon = (filename: string) => {
-    const ext = filename.toLowerCase().split('.').pop()
-    switch (ext) {
-      case 'xlsx':
-      case 'xls':
-        return { Icon: FileSpreadsheet, color: 'text-green-600 dark:text-green-400' }
-      case 'pptx':
-      case 'ppt':
-        return { Icon: Presentation, color: 'text-orange-600 dark:text-orange-400' }
-      case 'docx':
-      case 'doc':
-        return { Icon: FileText, color: 'text-blue-600 dark:text-blue-400' }
-      default:
-        return { Icon: FileText, color: 'text-blue-600 dark:text-blue-400' }
-    }
-  }
-
-  if (!messages || messages.length === 0) {
+if (!messages || messages.length === 0) {
     return null
   }
 
@@ -156,71 +138,6 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
       } catch (err) {
         console.error('Failed to save feedback:', err)
       }
-    }
-  }
-
-  // Handle document download
-  const handleDocumentDownload = async (filename: string, toolType: string) => {
-    if (!sessionId) {
-      console.error('No session ID available for document download')
-      return
-    }
-
-    try {
-      // Get auth token for BFF to extract userId
-      const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
-      try {
-        const session = await fetchAuthSession()
-        const token = session.tokens?.idToken?.toString()
-        if (token) {
-          authHeaders['Authorization'] = `Bearer ${token}`
-        }
-      } catch (error) {
-        console.log('[DocumentDownload] No auth session available')
-      }
-
-      // Step 1: Get S3 key from documents/download API
-      // BFF extracts userId from Authorization header
-      const s3KeyResponse = await fetch('/api/documents/download', {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          sessionId,
-          filename,
-          toolType
-        })
-      })
-
-      if (!s3KeyResponse.ok) {
-        throw new Error(`Failed to get S3 key: ${s3KeyResponse.status}`)
-      }
-
-      const { s3Key } = await s3KeyResponse.json()
-
-      // Step 2: Get presigned URL from existing presigned-url API
-      const presignedResponse = await fetch('/api/s3/presigned-url', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ s3Key })
-      })
-
-      if (!presignedResponse.ok) {
-        throw new Error(`Failed to get presigned URL: ${presignedResponse.status}`)
-      }
-
-      const { url } = await presignedResponse.json()
-
-      // Step 3: Trigger download
-      const link = document.createElement('a')
-      link.href = url
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-
-      console.log('[DocumentDownload] Download triggered:', filename)
-    } catch (err) {
-      console.error('Failed to download document:', err)
     }
   }
 
@@ -343,24 +260,6 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
   // Find latency metrics and token usage from the messages
   const latencyMetrics = sortedMessages.find(msg => msg.latencyMetrics)?.latencyMetrics
   const tokenUsage = sortedMessages.find(msg => msg.tokenUsage)?.tokenUsage
-
-  // Collect all documents from the turn (for rendering at the bottom)
-  // Word, Excel, and PowerPoint documents are excluded - they are shown in Canvas via tool execution button
-  const turnDocuments = useMemo(() => {
-    const docs: Array<{ filename: string; tool_type: string }> = []
-    sortedMessages.forEach(msg => {
-      if (msg.documents && msg.documents.length > 0) {
-        // Filter out Word, Excel, and PowerPoint documents - they're handled in Canvas
-        const canvasDocExts = ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt']
-        const nonCanvasDocs = msg.documents.filter(doc => {
-          const ext = doc.filename.toLowerCase().split('.').pop()
-          return !canvasDocExts.includes(ext || '')
-        })
-        docs.push(...nonCanvasDocs)
-      }
-    })
-    return docs
-  }, [sortedMessages])
 
   return (
     <div className="flex justify-start mb-8 group">
@@ -493,38 +392,6 @@ export const AssistantTurn = React.memo<AssistantTurnProps>(({ messages, current
             m.toolExecutions?.some(t => isCodeAgentExecution(t) && !t.isComplete)
           ) && (
             <CodeAgentTerminal steps={codeProgress} />
-          )}
-
-          {/* Generated Documents - Rendered at turn bottom */}
-          {turnDocuments.length > 0 && (
-            <div className="mt-4 p-3 bg-muted/50 rounded-lg border border-border/60">
-              <div className="flex items-center gap-2 mb-2">
-                <FileText className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-caption font-medium text-muted-foreground">
-                  {turnDocuments.length} {turnDocuments.length === 1 ? 'Document' : 'Documents'}
-                </span>
-              </div>
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {turnDocuments.map((doc, idx) => {
-                  const { Icon, color } = getFileIcon(doc.filename)
-                  return (
-                    <div
-                      key={idx}
-                      className="group relative flex items-center gap-2.5 px-3.5 py-2 bg-background hover:bg-muted/50 rounded-lg transition-all duration-200 cursor-pointer border border-border/50 hover:border-border flex-shrink-0"
-                      onClick={() => handleDocumentDownload(doc.filename, doc.tool_type)}
-                    >
-                      <div className="flex items-center justify-center w-7 h-7 bg-muted rounded shadow-sm">
-                        <Icon className={`h-3.5 w-3.5 ${color}`} />
-                      </div>
-                      <span className="text-label font-medium text-foreground whitespace-nowrap">
-                        {doc.filename}
-                      </span>
-                      <Download className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
           )}
 
           {/* Metrics - Minimal text on hover (hidden on mobile) */}
