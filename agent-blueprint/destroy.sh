@@ -13,19 +13,19 @@ NC='\033[0m' # No Color
 
 # Functions
 log_info() {
-    echo -e "${GREEN}✓${NC} $1"
+    echo -e "${GREEN}${NC} $1"
 }
 
 log_warn() {
-    echo -e "${YELLOW}⚠${NC} $1"
+    echo -e "${YELLOW}${NC} $1"
 }
 
 log_error() {
-    echo -e "${RED}✗${NC} $1"
+    echo -e "${RED}${NC} $1"
 }
 
 log_step() {
-    echo -e "${BLUE}▶${NC} $1"
+    echo -e "${BLUE}${NC} $1"
 }
 
 # Display banner
@@ -34,7 +34,7 @@ display_banner() {
     echo "  Strands Agent Chatbot - Destruction"
     echo "========================================"
     echo ""
-    echo -e "${RED}⚠️  WARNING: Destructive Operation${NC}"
+    echo -e "${RED}  WARNING: Destructive Operation${NC}"
     echo ""
 }
 
@@ -403,37 +403,37 @@ main() {
 
     case $OPTION in
         1)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 1: AgentCore Runtime Only"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             destroy_agentcore_runtime
             ;;
         2)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 2: Frontend + BFF Only"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             destroy_frontend
             ;;
         3)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 3: MCP Servers Only"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             destroy_mcp_servers
             ;;
         4)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 4: AgentCore Runtime A2A"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             destroy_agentcore_a2a
             ;;
         5)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 5: Full Stack (Everything)"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             log_warn "Destroying in reverse order: A2A → MCP Servers → Frontend → AgentCore"
             echo ""
@@ -441,19 +441,19 @@ main() {
             # Destroy A2A Agents first
             destroy_agentcore_a2a
             echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
 
             # Destroy MCP Servers
             destroy_mcp_servers
             echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
 
             # Then Frontend
             destroy_frontend
             echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
 
             # Finally AgentCore Runtime

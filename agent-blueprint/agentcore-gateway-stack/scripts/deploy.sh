@@ -39,11 +39,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "🚀 Deploying AgentCore Gateway Stack..."
+echo " Deploying AgentCore Gateway Stack..."
 echo ""
 
 if [ "$FORCE_REBUILD" = true ]; then
-  echo "⚡ Force rebuild mode enabled"
+  echo " Force rebuild mode enabled"
   echo ""
 fi
 
@@ -55,7 +55,7 @@ export PROJECT_NAME="${PROJECT_NAME:-strands-agent-chatbot}"
 export ENVIRONMENT="${ENVIRONMENT:-dev}"
 export AWS_REGION="${AWS_REGION:-us-west-2}"
 
-echo "📋 Configuration:"
+echo " Configuration:"
 echo "   Project: $PROJECT_NAME"
 echo "   Environment: $ENVIRONMENT"
 echo "   Region: $AWS_REGION"
@@ -66,14 +66,14 @@ echo ""
 # Step 1: Install CDK Dependencies
 # ============================================================================
 
-echo "📦 Step 1: Installing CDK dependencies..."
+echo " Step 1: Installing CDK dependencies..."
 cd "$INFRA_DIR"
 
 if [ ! -d "node_modules" ]; then
     echo "   Installing npm packages..."
     npm install
 else
-    echo "   ✅ Dependencies already installed"
+    echo "    Dependencies already installed"
 fi
 echo ""
 
@@ -81,7 +81,7 @@ echo ""
 # Step 2: Build TypeScript
 # ============================================================================
 
-echo "🔧 Step 2: Building TypeScript..."
+echo " Step 2: Building TypeScript..."
 npm run build
 echo ""
 
@@ -89,7 +89,7 @@ echo ""
 # Step 3: Synthesize CDK Stacks
 # ============================================================================
 
-echo "🏗️  Step 3: Synthesizing CDK stacks..."
+echo "  Step 3: Synthesizing CDK stacks..."
 npm run synth
 echo ""
 
@@ -97,7 +97,7 @@ echo ""
 # Step 4: Check and Configure API Keys
 # ============================================================================
 
-echo "🔑 Step 4: Checking API key configuration..."
+echo " Step 4: Checking API key configuration..."
 echo ""
 
 # Check if Tavily API key exists
@@ -108,7 +108,7 @@ TAVILY_SECRET_EXISTS=$(aws secretsmanager describe-secret \
     --region "$AWS_REGION" 2>/dev/null || echo "")
 
 if [ -z "$TAVILY_SECRET_EXISTS" ]; then
-    echo "⚠️  Tavily API Key not configured"
+    echo "  Tavily API Key not configured"
     echo ""
     echo "Tavily is required for tavily_search and tavily_extract tools."
     echo "Get your API key from: https://tavily.com/"
@@ -126,12 +126,12 @@ if [ -z "$TAVILY_SECRET_EXISTS" ]; then
             --secret-id "${PROJECT_NAME}/mcp/tavily-api-key" \
             --secret-string "$TAVILY_API_KEY" \
             --region "$AWS_REGION" > /dev/null 2>&1
-        echo "   ✅ Tavily API Key configured"
+        echo "    Tavily API Key configured"
     else
-        echo "   ⚠️  Skipped - Tavily tools will not work without API key"
+        echo "     Skipped - Tavily tools will not work without API key"
     fi
 else
-    echo "   ✅ Tavily API Key already configured"
+    echo "    Tavily API Key already configured"
 fi
 echo ""
 
@@ -143,7 +143,7 @@ GOOGLE_SECRET_EXISTS=$(aws secretsmanager describe-secret \
     --region "$AWS_REGION" 2>/dev/null || echo "")
 
 if [ -z "$GOOGLE_SECRET_EXISTS" ]; then
-    echo "⚠️  Google Credentials not configured"
+    echo "  Google Credentials not configured"
     echo ""
     echo "Google Custom Search is required for google_web_search and google_image_search."
     echo "Setup instructions:"
@@ -167,15 +167,15 @@ if [ -z "$GOOGLE_SECRET_EXISTS" ]; then
                 --secret-id "${PROJECT_NAME}/mcp/google-credentials" \
                 --secret-string "$GOOGLE_JSON" \
                 --region "$AWS_REGION" > /dev/null 2>&1
-            echo "   ✅ Google Credentials configured"
+            echo "    Google Credentials configured"
         else
-            echo "   ⚠️  Search Engine ID required - Google tools will not work"
+            echo "     Search Engine ID required - Google tools will not work"
         fi
     else
-        echo "   ⚠️  Skipped - Google search tools will not work without credentials"
+        echo "     Skipped - Google search tools will not work without credentials"
     fi
 else
-    echo "   ✅ Google Credentials already configured"
+    echo "    Google Credentials already configured"
 fi
 echo ""
 
@@ -187,7 +187,7 @@ GOOGLE_MAPS_SECRET_EXISTS=$(aws secretsmanager describe-secret \
     --region "$AWS_REGION" 2>/dev/null || echo "")
 
 if [ -z "$GOOGLE_MAPS_SECRET_EXISTS" ]; then
-    echo "⚠️  Google Maps Credentials not configured"
+    echo "  Google Maps Credentials not configured"
     echo ""
     echo "Google Maps Platform is required for 6 tools:"
     echo "  • search_places, search_nearby_places, get_place_details"
@@ -212,12 +212,12 @@ if [ -z "$GOOGLE_MAPS_SECRET_EXISTS" ]; then
             --secret-id "${PROJECT_NAME}/mcp/google-maps-credentials" \
             --secret-string "$GOOGLE_MAPS_JSON" \
             --region "$AWS_REGION" > /dev/null 2>&1
-        echo "   ✅ Google Maps Credentials configured"
+        echo "    Google Maps Credentials configured"
     else
-        echo "   ⚠️  Skipped - Google Maps tools will not work without API key"
+        echo "     Skipped - Google Maps tools will not work without API key"
     fi
 else
-    echo "   ✅ Google Maps Credentials already configured"
+    echo "    Google Maps Credentials already configured"
 fi
 echo ""
 
@@ -226,7 +226,7 @@ echo ""
 # ============================================================================
 
 if [ "$FORCE_REBUILD" = true ]; then
-  echo "🔄 Step 4.5: Forcing Lambda rebuild..."
+  echo " Step 4.5: Forcing Lambda rebuild..."
   echo ""
 
   # Get AWS account ID
@@ -241,15 +241,15 @@ if [ "$FORCE_REBUILD" = true ]; then
 
       # Delete all build artifacts to force rebuild
       aws s3 rm "s3://${LAMBDA_BUCKET}/builds/" --recursive --quiet || {
-        echo "   ⚠️  Warning: Could not delete previous builds (bucket may not exist yet)"
+        echo "     Warning: Could not delete previous builds (bucket may not exist yet)"
       }
 
-      echo "   ✅ Previous builds cleared - CodeBuild will rebuild all packages"
+      echo "    Previous builds cleared - CodeBuild will rebuild all packages"
     else
-      echo "   ℹ️  Lambda bucket doesn't exist yet (first deployment)"
+      echo "   ℹ  Lambda bucket doesn't exist yet (first deployment)"
     fi
   else
-    echo "   ⚠️  Warning: Could not determine AWS account ID"
+    echo "     Warning: Could not determine AWS account ID"
   fi
 
   echo ""
@@ -259,9 +259,9 @@ fi
 # Step 5: Deploy to AWS (CDK handles bucket creation and source upload)
 # ============================================================================
 
-echo "☁️  Step 6: Deploying to AWS..."
+echo "  Step 6: Deploying to AWS..."
 echo ""
-echo "ℹ️  Lambda functions will be built automatically by CodeBuild during deployment"
+echo "ℹ  Lambda functions will be built automatically by CodeBuild during deployment"
 echo "   This may take 5-10 minutes for the first deployment."
 echo ""
 npm run deploy
@@ -271,7 +271,7 @@ echo ""
 # Step 7: Retrieve Gateway Information
 # ============================================================================
 
-echo "📡 Step 7: Retrieving Gateway information..."
+echo " Step 7: Retrieving Gateway information..."
 echo ""
 
 # Get Gateway URL from Parameter Store
@@ -287,11 +287,11 @@ GATEWAY_ID=$(aws ssm get-parameter \
     --output text \
     --region "$AWS_REGION" 2>/dev/null || echo "Not yet available")
 
-echo "✅ Deployment complete!"
+echo " Deployment complete!"
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🎯 AgentCore Gateway Information"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo " AgentCore Gateway Information"
+echo ""
 echo ""
 echo "Gateway URL:  $GATEWAY_URL"
 echo "Gateway ID:   $GATEWAY_ID"
@@ -302,9 +302,9 @@ echo ""
 # Step 8: Verify API Key Configuration
 # ============================================================================
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🔑 API Key Status"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo " API Key Status"
+echo ""
 echo ""
 
 # Re-check API keys after deployment
@@ -327,10 +327,10 @@ GOOGLE_MAPS_CONFIGURED=$(aws secretsmanager describe-secret \
     --region "$AWS_REGION" 2>/dev/null || echo "")
 
 if [ -n "$TAVILY_CONFIGURED" ]; then
-    echo "✅ Tavily API Key: Configured"
+    echo " Tavily API Key: Configured"
     echo "   Tools: tavily_search, tavily_extract"
 else
-    echo "⚠️  Tavily API Key: Not configured"
+    echo "  Tavily API Key: Not configured"
     echo "   Tools disabled: tavily_search, tavily_extract"
     echo ""
     echo "   To configure manually:"
@@ -342,10 +342,10 @@ fi
 echo ""
 
 if [ -n "$GOOGLE_CONFIGURED" ]; then
-    echo "✅ Google Credentials: Configured"
+    echo " Google Credentials: Configured"
     echo "   Tools: google_web_search, google_image_search"
 else
-    echo "⚠️  Google Credentials: Not configured"
+    echo "  Google Credentials: Not configured"
     echo "   Tools disabled: google_web_search, google_image_search"
     echo ""
     echo "   To configure manually:"
@@ -357,11 +357,11 @@ fi
 echo ""
 
 if [ -n "$GOOGLE_MAPS_CONFIGURED" ]; then
-    echo "✅ Google Maps Credentials: Configured"
+    echo " Google Maps Credentials: Configured"
     echo "   Tools: search_places, search_nearby_places, get_place_details,"
     echo "          get_directions, geocode_address, reverse_geocode"
 else
-    echo "⚠️  Google Maps Credentials: Not configured"
+    echo "  Google Maps Credentials: Not configured"
     echo "   Tools disabled: search_places, search_nearby_places, get_place_details,"
     echo "                   get_directions, geocode_address, reverse_geocode"
     echo ""
@@ -374,25 +374,25 @@ fi
 echo ""
 
 # API-key-free tools
-echo "✅ Wikipedia Tools: Always available"
+echo " Wikipedia Tools: Always available"
 echo "   Tools: wikipedia_search, wikipedia_get_article"
 echo ""
-echo "✅ ArXiv Tools: Always available"
+echo " ArXiv Tools: Always available"
 echo "   Tools: arxiv_search, arxiv_get_paper"
 echo ""
-echo "✅ Finance Tools: Always available"
+echo " Finance Tools: Always available"
 echo "   Tools: stock_quote, stock_history, financial_news, stock_analysis"
 echo ""
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📝 Next Steps"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo " Next Steps"
+echo ""
 echo ""
 echo "1. Test Gateway: bash scripts/test-gateway.sh"
 echo "2. Update AgentCore Runtime to use Gateway URL"
 echo "3. Configure missing API keys if needed (see above)"
 echo ""
-echo "💡 Troubleshooting:"
+echo " Troubleshooting:"
 echo "   If Lambda functions show 'No module named' errors:"
 echo "   - Run: ./scripts/deploy.sh --force-rebuild"
 echo "   - This will rebuild all Lambda packages with fresh dependencies"

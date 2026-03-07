@@ -342,8 +342,7 @@ export class AgentRuntimeStack extends cdk.Stack {
         )
       : new s3.Bucket(this, 'DocumentBucket', {
           bucketName: `${projectName}-artifact-${this.account}-${this.region}`,
-          removalPolicy: cdk.RemovalPolicy.DESTROY,
-          autoDeleteObjects: true,
+          removalPolicy: cdk.RemovalPolicy.RETAIN,
           versioned: false,
           encryption: s3.BucketEncryption.S3_MANAGED,
           lifecycleRules: [
@@ -1044,12 +1043,13 @@ async function sendResponse(event, status, data, reason) {
 
     // Store artifact bucket name in SSM for cross-stack reference and USE_EXISTING_BUCKET
     if (!useExistingBucket) {
-      new ssm.StringParameter(this, 'ArtifactBucketParameter', {
+      const artifactBucketParam = new ssm.StringParameter(this, 'ArtifactBucketParameter', {
         parameterName: `/${projectName}/${environment}/agentcore/artifact-bucket`,
         stringValue: documentBucket.bucketName,
         description: 'Artifact bucket name for USE_EXISTING_BUCKET redeploy',
         tier: ssm.ParameterTier.STANDARD,
       })
+      artifactBucketParam.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN)
     }
 
     new cdk.CfnOutput(this, 'ArtifactBucketName', {

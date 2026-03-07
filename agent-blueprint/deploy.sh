@@ -13,19 +13,19 @@ NC='\033[0m' # No Color
 
 # Functions
 log_info() {
-    echo -e "${GREEN}✓${NC} $1"
+    echo -e "${GREEN}${NC} $1"
 }
 
 log_warn() {
-    echo -e "${YELLOW}⚠${NC} $1"
+    echo -e "${YELLOW}${NC} $1"
 }
 
 log_error() {
-    echo -e "${RED}✗${NC} $1"
+    echo -e "${RED}${NC} $1"
 }
 
 log_step() {
-    echo -e "${BLUE}▶${NC} $1"
+    echo -e "${BLUE}${NC} $1"
 }
 
 # Display banner
@@ -159,9 +159,9 @@ deploy_agentcore_runtime() {
     echo ""
 
     # Check and configure Nova Act IAM workflow
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
     echo "  Browser Automation Setup (Nova Act)"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
     echo ""
 
     # Auto-generate workflow definition name from project name
@@ -176,7 +176,7 @@ deploy_agentcore_runtime() {
 
     # Create workflow definition if it doesn't exist (idempotent)
     log_step "Ensuring Nova Act workflow definition exists: $NOVA_WORKFLOW_NAME"
-    python3 - <<PYEOF
+    PYTHONWARNINGS=ignore python3 - <<PYEOF
 import sys
 import boto3
 from nova_act.cli.workflow.workflow_manager import WorkflowManager
@@ -429,7 +429,7 @@ deploy_agentcore_runtime_a2a() {
                         ;;
                 esac
                 echo ""
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo ""
                 echo ""
             done
             ;;
@@ -595,7 +595,7 @@ deploy_all_a2a_agents() {
                 ;;
         esac
         echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
         echo ""
     done
 
@@ -606,7 +606,7 @@ deploy_all_a2a_agents() {
 display_deployment_summary() {
     echo ""
     echo "========================================"
-    echo "  🎉 DEPLOYMENT SUMMARY"
+    echo "   DEPLOYMENT SUMMARY"
     echo "========================================"
     echo ""
 
@@ -661,9 +661,9 @@ display_deployment_summary() {
     log_info "Deployment Region: $AWS_REGION"
     echo ""
 
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🌐 FRONTEND"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo " FRONTEND"
+    echo ""
     echo ""
     echo "CloudFront URL:      $CLOUDFRONT_URL"
     echo "Streaming ALB URL:   $STREAMING_ALB_URL"
@@ -677,9 +677,9 @@ display_deployment_summary() {
         --output text 2>/dev/null || echo "")
 
     if [ -n "$COGNITO_USER_POOL_ID" ] && [ "$COGNITO_USER_POOL_ID" != "None" ]; then
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "🔐 COGNITO AUTHENTICATION"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo " COGNITO AUTHENTICATION"
+        echo ""
         echo ""
         echo "User Pool ID:        $COGNITO_USER_POOL_ID"
         echo ""
@@ -690,24 +690,24 @@ display_deployment_summary() {
     fi
 
 
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🤖 AGENTCORE RUNTIME"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo " AGENTCORE RUNTIME"
+    echo ""
     echo ""
     echo "Runtime ARN:         $RUNTIME_ARN"
     echo ""
 
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🔧 MCP GATEWAY"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo " MCP GATEWAY"
+    echo ""
     echo ""
     echo "Gateway URL:         $GATEWAY_URL"
     echo ""
 
     if [ "$RESEARCH_AGENT_ARN" != "Not deployed" ] || [ "$CODE_AGENT_ARN" != "Not deployed" ]; then
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "🚀 A2A AGENTS"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo " A2A AGENTS"
+        echo ""
         echo ""
         if [ "$RESEARCH_AGENT_ARN" != "Not deployed" ]; then
             echo "Research Agent:      $RESEARCH_AGENT_ARN"
@@ -719,9 +719,9 @@ display_deployment_summary() {
     fi
 
     if [ "$MCP_3LO_ARN" != "Not deployed" ]; then
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "🔑 MCP 3LO SERVER"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo " MCP 3LO SERVER"
+        echo ""
         echo ""
         echo "MCP 3LO Runtime:     $MCP_3LO_ARN"
         echo "Tools:               search_emails, read_email"
@@ -729,10 +729,10 @@ display_deployment_summary() {
     fi
 
     echo "========================================"
-    echo "✅ All components deployed successfully!"
+    echo " All components deployed successfully!"
     echo "========================================"
     echo ""
-    echo "🚀 Access your chatbot at: $CLOUDFRONT_URL"
+    echo " Access your chatbot at: $CLOUDFRONT_URL"
     echo ""
 }
 
@@ -748,79 +748,79 @@ main() {
 
     case $OPTION in
         1)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 1: AgentCore Runtime Only"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             deploy_agentcore_runtime
             ;;
         2)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 2: Frontend + BFF Only"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             deploy_frontend
             ;;
         3)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 3: Runtime + Frontend"
             echo "  (AgentCore + BFF/Frontend)"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             deploy_agentcore_runtime
             echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             deploy_frontend
             ;;
         4)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 4: AgentCore Gateway MCP"
             echo "  (Gateway + Lambda functions)"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             deploy_mcp_servers
             ;;
         5)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 5: AgentCore Runtime A2A"
             echo "  (Research Agent, Code Agent)"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             deploy_agentcore_runtime_a2a
             ;;
         6)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 6: AgentCore Runtime MCP"
             echo "  (Gmail OAuth via 3LO)"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             deploy_mcp_3lo_server
             ;;
         7)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo "  Option 7: Full Stack"
             echo "  (Runtime + Frontend + Gateway + A2A + 3LO)"
             echo "  Cognito authentication will be enabled"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             deploy_agentcore_runtime
             echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             # Enable Cognito for Full Stack deployment
             export ENABLE_COGNITO=true
             deploy_frontend
             echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             deploy_mcp_servers
             echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             deploy_all_a2a_agents
             echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
             echo ""
             deploy_mcp_3lo_server
             echo ""

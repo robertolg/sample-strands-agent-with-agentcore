@@ -12,19 +12,19 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 log_info() {
-    echo -e "${GREEN}✓${NC} $1"
+    echo -e "${GREEN}${NC} $1"
 }
 
 log_warn() {
-    echo -e "${YELLOW}⚠${NC} $1"
+    echo -e "${YELLOW}${NC} $1"
 }
 
 log_error() {
-    echo -e "${RED}✗${NC} $1"
+    echo -e "${RED}${NC} $1"
 }
 
 log_step() {
-    echo -e "${BLUE}▶${NC} $1"
+    echo -e "${BLUE}${NC} $1"
 }
 
 echo "========================================"
@@ -32,7 +32,7 @@ echo "  MCP 3LO Server Runtime Deployment"
 echo "========================================"
 echo ""
 
-# ── 1. AWS Credentials Validation ─────────────────────────────
+#  1. AWS Credentials Validation 
 log_step "Checking AWS CLI..."
 if ! command -v aws &> /dev/null; then
     log_error "AWS CLI is not installed"
@@ -78,7 +78,7 @@ log_info "AWS Region: $AWS_REGION"
 log_info "Project Name: $PROJECT_NAME"
 log_info "Environment: $ENVIRONMENT"
 
-# ── Cognito configuration for JWT inbound auth ────────────────
+#  Cognito configuration for JWT inbound auth 
 # Try to get Cognito values from CloudFormation exports if not set
 if [ -z "$COGNITO_USER_POOL_ID" ]; then
     COGNITO_USER_POOL_ID=$(aws cloudformation list-exports --region $AWS_REGION \
@@ -104,7 +104,7 @@ fi
 echo ""
 
 
-# ── 2. CDK Build & Deploy ─────────────────────────────────────
+#  2. CDK Build & Deploy 
 cd cdk
 
 log_step "Installing CDK dependencies..."
@@ -155,7 +155,7 @@ npx cdk deploy --require-approval never
 
 cd ..
 
-# ── 3. OAuth Credential Provider Registration ─────────────────
+#  3. OAuth Credential Provider Registration 
 echo ""
 log_step "Checking OAuth credential providers..."
 echo ""
@@ -436,7 +436,7 @@ print(callback_url)
 fi
 echo ""
 
-# ── 4. Retrieve Stack Outputs ─────────────────────────────────
+#  4. Retrieve Stack Outputs 
 log_step "Retrieving stack outputs..."
 echo ""
 
@@ -458,7 +458,7 @@ REPO_URI=$(aws cloudformation describe-stacks \
     --query 'Stacks[0].Outputs[?OutputKey==`RepositoryUri`].OutputValue' \
     --output text 2>/dev/null || echo "")
 
-# ── 5. Configure Workload Identity for 3LO OAuth ─────────────────
+#  5. Configure Workload Identity for 3LO OAuth 
 # The Runtime creates a Workload Identity. We need to update it with
 # allowedResourceOauth2ReturnUrls so AgentCore knows where to redirect
 # after user completes OAuth consent.

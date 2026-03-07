@@ -3,39 +3,54 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
 
 export class CognitoAuthStack extends cdk.Stack {
-  public readonly userPool: cognito.UserPool;
+  public readonly userPool: cognito.IUserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
-  public readonly userPoolDomain: cognito.UserPoolDomain;
+  public readonly userPoolDomain: cognito.UserPoolDomain | undefined;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // Create Cognito User Pool for authentication
-    this.userPool = new cognito.UserPool(this, 'ChatbotUserPool', {
-      userPoolName: 'chatbot-users',
-      selfSignUpEnabled: true,
-      signInAliases: {
-        email: true,
-      },
-      autoVerify: {
-        email: true,
-      },
-      standardAttributes: {
-        email: {
-          required: true,
-          mutable: true,
+    const useExistingCognito = process.env.USE_EXISTING_COGNITO === 'true'
+    const existingUserPoolId = process.env.EXISTING_COGNITO_USER_POOL_ID || ''
+    const domainPrefix = `chatbot-${this.account.substring(0, 8)}-${this.region}`;
+
+    if (useExistingCognito && existingUserPoolId) {
+      // Import existing user pool and skip domain creation (domain already exists)
+      this.userPool = cognito.UserPool.fromUserPoolId(this, 'ChatbotUserPool', existingUserPoolId)
+    } else {
+      this.userPool = new cognito.UserPool(this, 'ChatbotUserPool', {
+        userPoolName: 'chatbot-users',
+        selfSignUpEnabled: true,
+        signInAliases: {
+          email: true,
         },
-      },
-      passwordPolicy: {
-        minLength: 8,
-        requireLowercase: true,
-        requireUppercase: true,
-        requireDigits: true,
-        requireSymbols: true,
-      },
-      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
+        autoVerify: {
+          email: true,
+        },
+        standardAttributes: {
+          email: {
+            required: true,
+            mutable: true,
+          },
+        },
+        passwordPolicy: {
+          minLength: 8,
+          requireLowercase: true,
+          requireUppercase: true,
+          requireDigits: true,
+          requireSymbols: true,
+        },
+        accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+        removalPolicy: cdk.RemovalPolicy.RETAIN,
+      })
+
+      this.userPoolDomain = new cognito.UserPoolDomain(this, 'ChatbotUserPoolDomain', {
+        userPool: this.userPool,
+        cognitoDomain: {
+          domainPrefix: domainPrefix,
+        },
+      });
+    }
 
     // Create Cognito User Pool Client
     this.userPoolClient = new cognito.UserPoolClient(this, 'ChatbotUserPoolClient', {
@@ -64,15 +79,6 @@ export class CognitoAuthStack extends cdk.Stack {
       },
     });
 
-    // Create Cognito User Pool Domain with consistent naming
-    const domainPrefix = `chatbot-${this.account.substring(0, 8)}-${this.region}`;
-    this.userPoolDomain = new cognito.UserPoolDomain(this, 'ChatbotUserPoolDomain', {
-      userPool: this.userPool,
-      cognitoDomain: {
-        domainPrefix: domainPrefix,
-      },
-    });
-
     // Export values for cross-stack references
     new cdk.CfnOutput(this, 'UserPoolId', {
       value: this.userPool.userPoolId,
@@ -86,9 +92,8 @@ export class CognitoAuthStack extends cdk.Stack {
       exportName: `${this.stackName}-UserPoolClientId`,
     });
 
-
     new cdk.CfnOutput(this, 'UserPoolDomain', {
-      value: this.userPoolDomain.domainName,
+      value: domainPrefix,
       description: 'Cognito User Pool Domain',
       exportName: `${this.stackName}-UserPoolDomain`,
     });
@@ -100,7 +105,7 @@ export class CognitoAuthStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'AuthLoginUrl', {
-      value: `https://${this.userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com/login`,
+      value: `https://${domainPrefix}.auth.${this.region}.amazoncognito.com/login`,
       description: 'Cognito Login Base URL',
     });
   }

@@ -8,7 +8,7 @@ echo "Starting Chatbot destruction..."
 export AWS_REGION=${AWS_REGION:-us-west-2}
 export AWS_DEFAULT_REGION=$AWS_REGION
 
-echo "🌍 Destruction region: $AWS_REGION"
+echo " Destruction region: $AWS_REGION"
 
 # Get account ID
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -22,11 +22,11 @@ INFRASTRUCTURE_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$INFRASTRUCTURE_DIR"
 
 # Debug: Show current directory
-echo "📂 Current directory: $(pwd)"
+echo " Current directory: $(pwd)"
 
 # Install dependencies if needed
 if [ ! -d "node_modules" ]; then
-    echo "📦 Installing CDK dependencies..."
+    echo " Installing CDK dependencies..."
     npm install
 fi
 
@@ -34,7 +34,7 @@ fi
 export CDK_DEFAULT_ACCOUNT=$ACCOUNT_ID
 export CDK_DEFAULT_REGION=$AWS_REGION
 
-echo "🗑️  Destroying Chatbot stacks..."
+echo "  Destroying Chatbot stacks..."
 
 # Function to ensure stack deletion starts
 ensure_stack_deletion() {
@@ -54,11 +54,11 @@ ensure_stack_deletion() {
         stack_status=$(aws cloudformation describe-stacks --stack-name "$stack_name" --region $AWS_REGION --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DELETED")
 
         if [[ "$stack_status" != "DELETE_IN_PROGRESS" && "$stack_status" != "DELETE_COMPLETE" && "$stack_status" != "DELETED" ]]; then
-            echo "⚠️  CDK destroy did not start deletion (status: $stack_status), using CloudFormation directly..."
+            echo "  CDK destroy did not start deletion (status: $stack_status), using CloudFormation directly..."
 
             # Execute delete-stack command with error handling
             if aws cloudformation delete-stack --stack-name "$stack_name" --region $AWS_REGION 2>&1; then
-                echo "✅ CloudFormation delete-stack command executed for $stack_name"
+                echo " CloudFormation delete-stack command executed for $stack_name"
 
                 # Wait for the delete operation to be recognized by AWS
                 echo "   Waiting for deletion to start..."
@@ -69,31 +69,31 @@ ensure_stack_deletion() {
                     new_status=$(aws cloudformation describe-stacks --stack-name "$stack_name" --region $AWS_REGION --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DELETED")
 
                     if [[ "$new_status" == "DELETE_IN_PROGRESS" || "$new_status" == "DELETE_COMPLETE" || "$new_status" == "DELETED" ]]; then
-                        echo "✅ Stack deletion started (status: $new_status)"
+                        echo " Stack deletion started (status: $new_status)"
                         break
                     fi
 
                     retries=$((retries + 1))
                     if [ $retries -ge $max_retries ]; then
-                        echo "⚠️  Deletion may not have started properly. Current status: $new_status"
+                        echo "  Deletion may not have started properly. Current status: $new_status"
                     fi
                 done
             else
-                echo "❌ Failed to execute delete-stack command for $stack_name"
+                echo " Failed to execute delete-stack command for $stack_name"
             fi
         else
-            echo "✅ Stack deletion in progress for $stack_name"
+            echo " Stack deletion in progress for $stack_name"
         fi
     else
-        echo "✅ $stack_name already deleted or not found"
+        echo " $stack_name already deleted or not found"
     fi
 }
 
 # Destroy main Chatbot stack FIRST (due to dependencies on CognitoAuthStack exports)
 if aws cloudformation describe-stacks --stack-name "ChatbotStack" --region $AWS_REGION &>/dev/null; then
-    ensure_stack_deletion "ChatbotStack" "🚀"
+    ensure_stack_deletion "ChatbotStack" ""
 else
-    echo "ℹ️  ChatbotStack not found or already destroyed"
+    echo "ℹ  ChatbotStack not found or already destroyed"
 fi
 
 # Wait for ChatbotStack to be fully deleted before destroying CognitoAuthStack
@@ -104,13 +104,13 @@ fi
 
 # Now destroy Cognito stack
 if aws cloudformation describe-stacks --stack-name "CognitoAuthStack" --region $AWS_REGION &>/dev/null; then
-    echo "🔐 Destroying CognitoAuthStack..."
+    echo " Destroying CognitoAuthStack..."
 
     # Use CloudFormation CLI directly for more reliable deletion
     aws cloudformation delete-stack --stack-name "CognitoAuthStack" --region $AWS_REGION
-    echo "✅ CognitoAuthStack deletion initiated"
+    echo " CognitoAuthStack deletion initiated"
 else
-    echo "ℹ️  CognitoAuthStack not found or already destroyed"
+    echo "ℹ  CognitoAuthStack not found or already destroyed"
 fi
 
 # Function to wait for stack deletion with progress
@@ -127,10 +127,10 @@ wait_for_stack_deletion() {
         stack_status=$(aws cloudformation describe-stacks --stack-name "$stack_name" --region $AWS_REGION --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DELETED")
 
         if [ "$stack_status" == "DELETED" ] || [ "$stack_status" == "DELETE_COMPLETE" ]; then
-            echo "✅ $stack_name deleted successfully"
+            echo " $stack_name deleted successfully"
             return 0
         elif [ "$stack_status" == "DELETE_FAILED" ]; then
-            echo "❌ $stack_name deletion failed"
+            echo " $stack_name deletion failed"
             return 1
         else
             echo "   ⏳ Status: $stack_status (${elapsed}s elapsed)"
@@ -139,7 +139,7 @@ wait_for_stack_deletion() {
         fi
     done
 
-    echo "⚠️  Timeout waiting for $stack_name deletion (waited ${max_wait}s)"
+    echo "  Timeout waiting for $stack_name deletion (waited ${max_wait}s)"
     return 1
 }
 
@@ -149,14 +149,14 @@ if aws cloudformation describe-stacks --stack-name "CognitoAuthStack" --region $
     wait_for_stack_deletion "CognitoAuthStack"
 fi
 
-echo "✅ Chatbot stacks destroyed successfully!"
+echo " Chatbot stacks destroyed successfully!"
 echo ""
 
 # ============================================================
 # Destroy Gateway Stacks (AgentCore Gateway + Lambda Tools)
 # ============================================================
 
-echo "🔧 Destroying Gateway stacks..."
+echo " Destroying Gateway stacks..."
 
 # Get project name from environment or use default
 PROJECT_NAME=${PROJECT_NAME:-strands-agent-chatbot}
@@ -174,11 +174,11 @@ delete_gateway_stack() {
     local stack_name=$1
 
     if aws cloudformation describe-stacks --stack-name "$stack_name" --region $AWS_REGION &>/dev/null; then
-        echo "🗑️  Deleting $stack_name..."
+        echo "  Deleting $stack_name..."
         aws cloudformation delete-stack --stack-name "$stack_name" --region $AWS_REGION
-        echo "✅ $stack_name deletion initiated"
+        echo " $stack_name deletion initiated"
     else
-        echo "ℹ️  $stack_name not found or already deleted"
+        echo "ℹ  $stack_name not found or already deleted"
     fi
 }
 
@@ -195,9 +195,9 @@ for stack in "${GATEWAY_STACKS[@]}"; do
     fi
 done
 
-echo "✅ All destruction completed successfully!"
+echo " All destruction completed successfully!"
 echo ""
-echo "🧹 Optional cleanup:"
+echo " Optional cleanup:"
 echo "  - ECR repositories: chatbot-backend, chatbot-frontend"
 echo "  - CloudWatch log groups: /aws/ecs/chatbot-*"
 echo "  - Parameter Store entries: /mcp/endpoints/*"
