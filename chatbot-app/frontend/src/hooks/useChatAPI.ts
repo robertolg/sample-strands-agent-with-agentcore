@@ -661,7 +661,7 @@ export const useChatAPI = ({
             let lastStatus = response.status
             for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
               const baseDelay = Math.min(1000 * Math.pow(2, attempt - 1), 4000)
-              const delay = Math.floor(baseDelay * (0.5 + Math.random() * 0.5)) // jitter to avoid thundering herd
+              const delay = Math.floor(baseDelay * (0.5 + crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000 * 0.5))
               logger.info(`[useChatAPI] Retrying after ${response.status} (attempt ${attempt}/${MAX_RETRIES}, wait ${delay}ms)`)
               await new Promise(resolve => setTimeout(resolve, delay))
 

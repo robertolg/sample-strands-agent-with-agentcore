@@ -644,7 +644,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
       } : {})
     }
 
-    currentTurnIdRef.current = `turn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    currentTurnIdRef.current = `turn_${crypto.randomUUID()}`
     const requestStartTime = Date.now()
 
     setMessages(prev => [...prev, userMessage])
@@ -984,7 +984,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
 
       // Create new tool message (like text mode's isToolMessage pattern)
       return [...updated, {
-        id: `voice_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: `voice_tool_${crypto.randomUUID()}`,
         text: '',
         sender: 'bot' as const,
         timestamp: new Date().toISOString(),
@@ -1062,7 +1062,7 @@ export const useChat = (props?: UseChatProps): UseChatReturn => {
 
       return prev.map(msg => {
         if (msg.isVoiceMessage && msg.isStreaming === true) {
-          const finalId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+          const finalId = `voice_${crypto.randomUUID()}`
           console.log(`[useChat] Finalizing ${msg.sender} message: ${msg.id} -> ${finalId}`)
           return { ...msg, id: finalId, isStreaming: false }
         }
