@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import type { ImagePickerAsset } from 'expo-image-picker'
@@ -35,6 +35,7 @@ export default function ChatScreen({
   const [selectedModelId, setSelectedModelId] = useState(DEFAULT_MODEL_ID)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const insets = useSafeAreaInsets()
 
   // Load persisted model selection
   useEffect(() => {
@@ -103,132 +104,138 @@ export default function ChatScreen({
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.bg }]} edges={['top', 'left', 'right']}>
-      <View style={styles.container}>
-        {/* ── Header ── */}
-        <View style={[styles.header, { borderBottomColor: colors.border, backgroundColor: colors.bg }]}>
-          {onMenuPress && (
-            <Pressable style={[styles.headerBtn, { backgroundColor: colors.bgSecondary }]} onPress={onMenuPress}>
-              <Ionicons name="menu-outline" size={20} color={colors.text} />
-            </Pressable>
-          )}
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Cord</Text>
-          <View style={styles.headerRight}>
-            {onNewChat && (
-              <Pressable style={[styles.headerBtn, { backgroundColor: colors.bgSecondary }]} onPress={onNewChat}>
-                <Ionicons name="create-outline" size={19} color={colors.text} />
+      <KeyboardAvoidingView 
+        style={{ flex: 1 }} 
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
+        <View style={styles.container}>
+          {/* ── Header ── */}
+          <View style={[styles.header, { borderBottomColor: colors.border, backgroundColor: colors.bg }]}>
+            {onMenuPress && (
+              <Pressable style={[styles.headerBtn, { backgroundColor: colors.bgSecondary }]} onPress={onMenuPress}>
+                <Ionicons name="menu-outline" size={20} color={colors.text} />
               </Pressable>
             )}
-            <Pressable
-              style={[styles.headerBtn, { backgroundColor: colors.bgSecondary }]}
-              onPress={() => setSettingsOpen(o => !o)}
-            >
-              <Ionicons name="settings-outline" size={19} color={colors.text} />
-            </Pressable>
+            <Text style={[styles.headerTitle, { color: colors.text }]}>Cord</Text>
+            <View style={styles.headerRight}>
+              {onNewChat && (
+                <Pressable style={[styles.headerBtn, { backgroundColor: colors.bgSecondary }]} onPress={onNewChat}>
+                  <Ionicons name="create-outline" size={19} color={colors.text} />
+                </Pressable>
+              )}
+              <Pressable
+                style={[styles.headerBtn, { backgroundColor: colors.bgSecondary }]}
+                onPress={() => setSettingsOpen(o => !o)}
+              >
+                <Ionicons name="settings-outline" size={19} color={colors.text} />
+              </Pressable>
+            </View>
           </View>
-        </View>
 
-        {/* ── Settings dropdown ── */}
-        {settingsOpen && (
-          <View style={[styles.settingsDropdown, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            {/* Model selection */}
-            <Pressable
-              style={styles.settingsItem}
-              onPress={() => {
-                setSettingsOpen(false)
-                setModelPickerOpen(true)
-              }}
-            >
-              <Ionicons name="hardware-chip-outline" size={18} color={colors.text} />
-              <View style={styles.settingsModelInfo}>
-                <Text style={[styles.settingsText, { color: colors.text }]}>Model</Text>
-                <Text style={[styles.settingsSubtext, { color: colors.textMuted }]} numberOfLines={1}>
-                  {selectedModelName}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={14} color={colors.textMuted} />
-            </Pressable>
+          {/* ── Settings dropdown ── */}
+          {settingsOpen && (
+            <View style={[styles.settingsDropdown, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              {/* Model selection */}
+              <Pressable
+                style={styles.settingsItem}
+                onPress={() => {
+                  setSettingsOpen(false)
+                  setModelPickerOpen(true)
+                }}
+              >
+                <Ionicons name="hardware-chip-outline" size={18} color={colors.text} />
+                <View style={styles.settingsModelInfo}>
+                  <Text style={[styles.settingsText, { color: colors.text }]}>Model</Text>
+                  <Text style={[styles.settingsSubtext, { color: colors.textMuted }]} numberOfLines={1}>
+                    {selectedModelName}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={14} color={colors.textMuted} />
+              </Pressable>
 
-            <Pressable
-              style={[styles.settingsItem, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}
-              onPress={() => {
-                setSettingsOpen(false)
-                toggleTheme()
-              }}
-            >
-              <Ionicons name={isDark ? 'sunny-outline' : 'moon-outline'} size={18} color={colors.text} />
-              <Text style={[styles.settingsText, { color: colors.text }]}>
-                {isDark ? 'Light mode' : 'Dark mode'}
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.settingsItem, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}
-              onPress={() => {
-                setSettingsOpen(false)
-                setDisplayMode(isDetailed ? 'minimal' : 'detailed')
-              }}
-            >
-              <Ionicons name={isDetailed ? 'eye-off-outline' : 'eye-outline'} size={18} color={colors.text} />
-              <Text style={[styles.settingsText, { color: colors.text }]}>
-                {isDetailed ? 'Minimal view' : 'Detailed view'}
-              </Text>
-            </Pressable>
-
-            {onSignOut && (
               <Pressable
                 style={[styles.settingsItem, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}
                 onPress={() => {
                   setSettingsOpen(false)
-                  onSignOut()
+                  toggleTheme()
                 }}
               >
-                <Ionicons name="log-out-outline" size={18} color={colors.error} />
-                <Text style={[styles.settingsText, { color: colors.error }]}>Sign out</Text>
+                <Ionicons name={isDark ? 'sunny-outline' : 'moon-outline'} size={18} color={colors.text} />
+                <Text style={[styles.settingsText, { color: colors.text }]}>
+                  {isDark ? 'Light mode' : 'Dark mode'}
+                </Text>
               </Pressable>
+
+              <Pressable
+                style={[styles.settingsItem, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}
+                onPress={() => {
+                  setSettingsOpen(false)
+                  setDisplayMode(isDetailed ? 'minimal' : 'detailed')
+                }}
+              >
+                <Ionicons name={isDetailed ? 'eye-off-outline' : 'eye-outline'} size={18} color={colors.text} />
+                <Text style={[styles.settingsText, { color: colors.text }]}>
+                  {isDetailed ? 'Minimal view' : 'Detailed view'}
+                </Text>
+              </Pressable>
+
+              {onSignOut && (
+                <Pressable
+                  style={[styles.settingsItem, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}
+                  onPress={() => {
+                    setSettingsOpen(false)
+                    onSignOut()
+                  }}
+                >
+                  <Ionicons name="log-out-outline" size={18} color={colors.error} />
+                  <Text style={[styles.settingsText, { color: colors.error }]}>Sign out</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
+
+          {isReconnecting && (
+            <View style={[styles.reconnectBanner, { backgroundColor: colors.warningBg }]}>
+              <ActivityIndicator size="small" color={colors.warningText} />
+              <Text style={[styles.reconnectText, { color: colors.warningText }]}>
+                Reconnecting… (attempt {reconnectAttempt}/5)
+              </Text>
+            </View>
+          )}
+
+          <View style={{ flex: 1 }} onTouchStart={() => settingsOpen && setSettingsOpen(false)}>
+            {showGreeting ? (
+              <GreetingScreen />
+            ) : (
+              <MessageList
+                messages={messages}
+                isThinking={isThinking}
+                thinkingLabel={thinkingMessage}
+                hasMore={hasMore}
+                onLoadMore={loadMore}
+              />
             )}
           </View>
-        )}
 
-        {isReconnecting && (
-          <View style={[styles.reconnectBanner, { backgroundColor: colors.warningBg }]}>
-            <ActivityIndicator size="small" color={colors.warningText} />
-            <Text style={[styles.reconnectText, { color: colors.warningText }]}>
-              Reconnecting… (attempt {reconnectAttempt}/5)
-            </Text>
-          </View>
-        )}
-
-        <View style={{ flex: 1 }} onTouchStart={() => settingsOpen && setSettingsOpen(false)}>
-          {showGreeting ? (
-            <GreetingScreen />
-          ) : (
-            <MessageList
-              messages={messages}
-              isThinking={isThinking}
-              thinkingLabel={thinkingMessage}
-              hasMore={hasMore}
-              onLoadMore={loadMore}
-            />
+          {pendingInterrupt && (
+            <View style={[styles.interruptWrapper, { backgroundColor: colors.bg }]}>
+              <InterruptCard
+                interrupts={pendingInterrupt.interrupts}
+                onApprove={() => dismissInterrupt(true)}
+                onReject={() => dismissInterrupt(false)}
+              />
+            </View>
           )}
+
+          <ChatInputBar
+            onSend={handleSend}
+            onStop={stopStream}
+            isStreaming={isStreaming}
+            disabled={!!pendingInterrupt}
+          />
         </View>
-
-        {pendingInterrupt && (
-          <View style={[styles.interruptWrapper, { backgroundColor: colors.bg }]}>
-            <InterruptCard
-              interrupts={pendingInterrupt.interrupts}
-              onApprove={() => dismissInterrupt(true)}
-              onReject={() => dismissInterrupt(false)}
-            />
-          </View>
-        )}
-
-        <ChatInputBar
-          onSend={handleSend}
-          onStop={stopStream}
-          isStreaming={isStreaming}
-          disabled={!!pendingInterrupt}
-        />
-      </View>
+      </KeyboardAvoidingView>
 
       <OAuthElicitationModal oauth={pendingOAuth} onComplete={dismissOAuth} />
 

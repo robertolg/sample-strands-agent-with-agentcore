@@ -1,5 +1,5 @@
-import React from 'react'
-import { StyleSheet, Text, View } from 'react-native'
+import React, { memo } from 'react'
+import { StyleSheet, Text, View, Platform } from 'react-native'
 import Markdown from 'react-native-markdown-display'
 import * as WebBrowser from 'expo-web-browser'
 import { useTheme } from '../../context/ThemeContext'
@@ -10,7 +10,6 @@ interface Props {
 }
 
 // Convert <cite source="X" url="Y">text</cite> → "text [↗ domain](url)"
-// The custom link rule below renders these as chip badges.
 function preprocessCitations(raw: string): string {
   return raw.replace(
     /<cite\s+(?:[^>]*?\s+)?url="([^"]*?)"[^>]*>([\s\S]*?)<\/cite>/g,
@@ -25,18 +24,19 @@ function getDomain(url: string): string {
   return url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] ?? url
 }
 
-export default function StreamingText({ text }: Props) {
+const StreamingTextComponent = ({ text }: Props) => {
   const { colors } = useTheme()
 
   if (!text) return null
 
-  const processed = preprocessCitations(text)
+  // Memoize processed text to avoid re-running regex on every small stream update
+  const processed = React.useMemo(() => preprocessCitations(text), [text])
 
-  const markdownStyles = {
+  const markdownStyles = React.useMemo(() => ({
     body: { color: colors.text, fontSize: 15, lineHeight: 22 },
     code_inline: {
       backgroundColor: colors.codeInlineBg,
-      fontFamily: 'Courier',
+      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
       fontSize: 13,
       paddingHorizontal: 4,
       borderRadius: 3,
@@ -45,7 +45,7 @@ export default function StreamingText({ text }: Props) {
     fence: {
       backgroundColor: colors.codeBg,
       color: colors.codeText,
-      fontFamily: 'Courier',
+      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
       fontSize: 12,
       borderRadius: 8,
       padding: 12,
@@ -57,14 +57,13 @@ export default function StreamingText({ text }: Props) {
       padding: 12,
       marginVertical: 8,
       color: colors.codeText,
-      fontFamily: 'Courier',
+      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
       fontSize: 12,
     },
     paragraph: { marginVertical: 2 },
     bullet_list: { marginLeft: 0 },
     ordered_list: { marginLeft: 0 },
     list_item: { marginVertical: 2 },
-    // Headings slightly larger than body — avoids overwhelming the chat bubble
     heading1: { fontSize: 16, fontWeight: '700' as const, marginVertical: 4, color: colors.text },
     heading2: { fontSize: 15, fontWeight: '700' as const, marginVertical: 3, color: colors.text },
     heading3: { fontSize: 15, fontWeight: '600' as const, marginVertical: 2, color: colors.text },
@@ -78,18 +77,15 @@ export default function StreamingText({ text }: Props) {
       marginVertical: 6,
     },
     hr: { borderTopColor: colors.border, borderTopWidth: 1, marginVertical: 10 },
-    // link style is overridden by custom rule below; keep as fallback
     link: { color: colors.primary },
-  }
+  }), [colors])
 
-  // Custom inline chip for citation links (and regular links)
-  const rules = {
+  const rules = React.useMemo(() => ({
     link: (node: any, children: any) => {
       const href: string = node.attributes?.href ?? ''
       const child = Array.isArray(children) ? children[0] : children
       const label = typeof child === 'string' ? child : String(child ?? '')
 
-      // Citation link: starts with ↗ — render as chip badge
       if (label.startsWith('↗')) {
         const domain = getDomain(href)
         return (
@@ -109,7 +105,6 @@ export default function StreamingText({ text }: Props) {
         )
       }
 
-      // Regular link — standard colored text
       return (
         <Text
           key={node.key}
@@ -120,7 +115,7 @@ export default function StreamingText({ text }: Props) {
         </Text>
       )
     },
-  }
+  }), [colors])
 
   return (
     <View style={styles.container}>
@@ -130,6 +125,8 @@ export default function StreamingText({ text }: Props) {
     </View>
   )
 }
+
+export default memo(StreamingTextComponent)
 
 const styles = StyleSheet.create({
   container: { flexShrink: 1 },

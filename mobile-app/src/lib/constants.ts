@@ -4,7 +4,7 @@ export const API_BASE_URL = (
 
 export const DEFAULT_MODEL_ID = 'us.anthropic.claude-sonnet-4-6'
 export const DEFAULT_TEMPERATURE = 0.7
-export const TEXT_BUFFER_FLUSH_MS = 50
+export const TEXT_BUFFER_FLUSH_MS = 120
 
 export const ENDPOINTS = {
   chat: '/api/stream/chat',

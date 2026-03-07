@@ -143,79 +143,76 @@ export default function ChatInputBar({ onSend, onStop, isStreaming, disabled }: 
   const canSend = (text.trim().length > 0 || selectedImages.length > 0 || selectedDocs.length > 0) && !disabled
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={[styles.wrapper, { backgroundColor: colors.bg, borderTopColor: colors.border }]}>
+    <View style={[styles.wrapper, { backgroundColor: colors.bg, borderTopColor: colors.border }]}>
+      {/* Image preview strip */}
+      {selectedImages.length > 0 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}
+          style={styles.previewScroll} contentContainerStyle={styles.previewContent}>
+          {selectedImages.map((img, i) => (
+            <View key={i} style={styles.previewItem}>
+              <Image source={{ uri: img.uri }} style={styles.previewImage} />
+              <Pressable style={[styles.removeBtn, { backgroundColor: colors.textSecondary }]}
+                onPress={() => removeImage(i)} hitSlop={8}>
+                <Ionicons name="close" size={10} color={colors.textInverse} />
+              </Pressable>
+            </View>
+          ))}
+        </ScrollView>
+      )}
 
-        {/* Image preview strip */}
-        {selectedImages.length > 0 && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}
-            style={styles.previewScroll} contentContainerStyle={styles.previewContent}>
-            {selectedImages.map((img, i) => (
-              <View key={i} style={styles.previewItem}>
-                <Image source={{ uri: img.uri }} style={styles.previewImage} />
-                <Pressable style={[styles.removeBtn, { backgroundColor: colors.textSecondary }]}
-                  onPress={() => removeImage(i)} hitSlop={8}>
-                  <Ionicons name="close" size={10} color={colors.textInverse} />
-                </Pressable>
-              </View>
-            ))}
-          </ScrollView>
-        )}
+      {/* Document preview strip */}
+      {selectedDocs.length > 0 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}
+          style={styles.previewScroll} contentContainerStyle={styles.previewContent}>
+          {selectedDocs.map((doc, i) => (
+            <View key={i} style={[styles.docBadge, { backgroundColor: colors.toolChipBg, borderColor: colors.border }]}>
+              <Ionicons name="document-text-outline" size={14} color={colors.textSecondary} />
+              <Text style={[styles.docName, { color: colors.textSecondary }]} numberOfLines={1}>{doc.name}</Text>
+              <Pressable onPress={() => removeDoc(i)} hitSlop={8}>
+                <Ionicons name="close-circle" size={14} color={colors.textMuted} />
+              </Pressable>
+            </View>
+          ))}
+        </ScrollView>
+      )}
 
-        {/* Document preview strip */}
-        {selectedDocs.length > 0 && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}
-            style={styles.previewScroll} contentContainerStyle={styles.previewContent}>
-            {selectedDocs.map((doc, i) => (
-              <View key={i} style={[styles.docBadge, { backgroundColor: colors.toolChipBg, borderColor: colors.border }]}>
-                <Ionicons name="document-text-outline" size={14} color={colors.textSecondary} />
-                <Text style={[styles.docName, { color: colors.textSecondary }]} numberOfLines={1}>{doc.name}</Text>
-                <Pressable onPress={() => removeDoc(i)} hitSlop={8}>
-                  <Ionicons name="close-circle" size={14} color={colors.textMuted} />
-                </Pressable>
-              </View>
-            ))}
-          </ScrollView>
-        )}
+      {/* Input row */}
+      <View style={styles.inputRow}>
+        {/* + attach button */}
+        <Pressable
+          style={[styles.iconBtn, { backgroundColor: colors.bgSecondary }]}
+          onPress={() => setShowAttachMenu(true)}
+          disabled={isStreaming || disabled}
+          accessibilityLabel="Attach"
+        >
+          <Ionicons name="add" size={22}
+            color={isStreaming || disabled ? colors.textMuted : colors.textSecondary} />
+        </Pressable>
 
-        {/* Input row */}
-        <View style={styles.inputRow}>
-          {/* + attach button */}
-          <Pressable
-            style={[styles.iconBtn, { backgroundColor: colors.bgSecondary }]}
-            onPress={() => setShowAttachMenu(true)}
-            disabled={isStreaming || disabled}
-            accessibilityLabel="Attach"
-          >
-            <Ionicons name="add" size={22}
-              color={isStreaming || disabled ? colors.textMuted : colors.textSecondary} />
+        <TextInput
+          style={[styles.input, { backgroundColor: colors.bgInput, color: colors.text }]}
+          value={text}
+          onChangeText={setText}
+          placeholder="Message…"
+          placeholderTextColor={colors.textMuted}
+          multiline
+          returnKeyType="default"
+          editable={!disabled && !isStreaming}
+          maxLength={8000}
+          accessibilityLabel="Message input"
+        />
+
+        {isStreaming ? (
+          <Pressable style={[styles.sendBtn, { backgroundColor: colors.textSecondary }]}
+            onPress={onStop} accessibilityLabel="Stop">
+            <View style={[styles.stopIcon, { backgroundColor: colors.textInverse }]} />
           </Pressable>
-
-          <TextInput
-            style={[styles.input, { backgroundColor: colors.bgInput, color: colors.text }]}
-            value={text}
-            onChangeText={setText}
-            placeholder="Message…"
-            placeholderTextColor={colors.textMuted}
-            multiline
-            returnKeyType="default"
-            editable={!disabled && !isStreaming}
-            maxLength={8000}
-            accessibilityLabel="Message input"
-          />
-
-          {isStreaming ? (
-            <Pressable style={[styles.sendBtn, { backgroundColor: colors.textSecondary }]}
-              onPress={onStop} accessibilityLabel="Stop">
-              <View style={[styles.stopIcon, { backgroundColor: colors.textInverse }]} />
-            </Pressable>
-          ) : (
-            <Pressable style={[styles.sendBtn, { backgroundColor: canSend ? colors.primary : colors.border }]}
-              onPress={handleSend} disabled={!canSend} accessibilityLabel="Send message">
-              <Ionicons name="arrow-up" size={22} color={colors.textInverse} />
-            </Pressable>
-          )}
-        </View>
+        ) : (
+          <Pressable style={[styles.sendBtn, { backgroundColor: canSend ? colors.primary : colors.border }]}
+            onPress={handleSend} disabled={!canSend} accessibilityLabel="Send message">
+            <Ionicons name="arrow-up" size={22} color={colors.textInverse} />
+          </Pressable>
+        )}
       </View>
 
       {/* Attach menu sheet */}
@@ -240,7 +237,7 @@ export default function ChatInputBar({ onSend, onStop, isStreaming, disabled }: 
           </View>
         </TouchableWithoutFeedback>
       </Modal>
-    </KeyboardAvoidingView>
+    </View>
   )
 }
 

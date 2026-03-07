@@ -19,74 +19,31 @@ export default function MessageList({ messages, isThinking, thinkingLabel, hasMo
   const flatListRef = useRef<FlatList>(null)
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false)
   const loadMoreGuard = useRef(false)
-  // Suppress scroll-up detection until the first user-initiated scroll
   const hasUserScrolled = useRef(false)
 
-  // Auto-scroll to bottom on new content (unless user scrolled up)
-  // Throttled: scroll immediately if cooldown has passed, otherwise schedule end-of-cooldown scroll
-  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const lastScrollTimeRef = useRef(0)
-  const SCROLL_COOLDOWN_MS = 120
-  const lastMsg = messages[messages.length - 1]
-  // Include text-length bucket so scroll fires during streaming as text grows
-  const textBucket = lastMsg?.isStreaming ? Math.floor((lastMsg?.text?.length ?? 0) / 150) : 0
-  const scrollTrigger = `${messages.length}:${lastMsg?.toolExecutions?.length ?? 0}:${lastMsg?.isStreaming ?? false}:${textBucket}`
+  // Reverse messages for inverted list (latest at the bottom/index 0)
+  const reversedMessages = React.useMemo(() => [...messages].reverse(), [messages])
 
+  // In an inverted list, index 0 is the bottom.
+  // We scroll to offset 0 to stay at the bottom.
   useEffect(() => {
     if (messages.length === 0 || isUserScrolledUp) return
-    const now = Date.now()
-    const elapsed = now - lastScrollTimeRef.current
-    if (elapsed >= SCROLL_COOLDOWN_MS) {
-      // Enough time passed — scroll immediately
-      flatListRef.current?.scrollToEnd({ animated: false })
-      lastScrollTimeRef.current = now
-      if (scrollTimerRef.current) {
-        clearTimeout(scrollTimerRef.current)
-        scrollTimerRef.current = null
-      }
-    } else {
-      // Too soon — schedule a scroll at the end of the cooldown window
-      if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current)
-      scrollTimerRef.current = setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: false })
-        lastScrollTimeRef.current = Date.now()
-        scrollTimerRef.current = null
-      }, SCROLL_COOLDOWN_MS - elapsed)
-    }
-  }, [scrollTrigger, isThinking, isUserScrolledUp])
-
-  // Reset scroll state when message list changes significantly (e.g. session switch)
-  const prevCountRef = useRef(messages.length)
-  useEffect(() => {
-    const prev = prevCountRef.current
-    prevCountRef.current = messages.length
-    // If messages were replaced (not appended), reset scroll state
-    if (messages.length > 0 && prev === 0) {
-      setIsUserScrolledUp(false)
-      hasUserScrolled.current = false
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: false })
-      }, 100)
-    }
-  }, [messages.length])
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true })
+  }, [messages.length, isThinking, isUserScrolledUp])
 
   const handleScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent
-
-      // Ignore layout-triggered scroll events before user interaction
+      const { contentOffset } = e.nativeEvent
       if (!hasUserScrolled.current) return
 
-      const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y
+      // Inverted list: scroll up means contentOffset.y increases
+      setIsUserScrolledUp(contentOffset.y > 100)
 
-      // User scrolled up detection
-      setIsUserScrolledUp(distanceFromBottom > 150)
-
-      // Near top — load more older messages
-      if (contentOffset.y < 100 && hasMore && onLoadMore && !loadMoreGuard.current) {
+      // Near "top" (which is the end of the data in inverted list) — load more
+      if (contentOffset.y > 300 && hasMore && onLoadMore && !loadMoreGuard.current) {
         loadMoreGuard.current = true
         onLoadMore()
-        setTimeout(() => { loadMoreGuard.current = false }, 300)
+        setTimeout(() => { loadMoreGuard.current = false }, 500)
       }
     },
     [hasMore, onLoadMore],
@@ -97,13 +54,15 @@ export default function MessageList({ messages, isThinking, thinkingLabel, hasMo
   }, [])
 
   const scrollToBottom = useCallback(() => {
-    flatListRef.current?.scrollToEnd({ animated: true })
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true })
     setIsUserScrolledUp(false)
   }, [])
 
   const renderItem = useCallback(
     ({ item }: { item: Message }) => (
-      <MessageBubble message={item} />
+      <View style={styles.bubbleWrapper}>
+        <MessageBubble message={item} />
+      </View>
     ),
     [],
   )
@@ -114,33 +73,32 @@ export default function MessageList({ messages, isThinking, thinkingLabel, hasMo
     <View style={{ flex: 1 }}>
       <FlatList
         ref={flatListRef}
-        data={messages}
+        data={reversedMessages}
         renderItem={renderItem}
         keyExtractor={keyExtractor}
+        inverted
         style={{ flex: 1, backgroundColor: colors.bg }}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
-        removeClippedSubviews={false}
-        maxToRenderPerBatch={8}
-        windowSize={7}
-        initialNumToRender={10}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
         onScroll={handleScroll}
         onScrollBeginDrag={handleScrollBeginDrag}
-        scrollEventThrottle={100}
-        maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
+        scrollEventThrottle={16} // Increased for smoother scroll tracking
+        maintainVisibleContentPosition={{
+          minIndexForVisible: 0,
+        }}
         ListHeaderComponent={
-          hasMore ? (
-            <View style={styles.loadMoreRow}>
-              <ActivityIndicator size="small" color={colors.textMuted} />
+          isThinking ? (
+            <View style={styles.thinkingRow}>
+              <ThinkingIndicator label={thinkingLabel} />
             </View>
           ) : null
         }
         ListFooterComponent={
-          isThinking ? (
-            <View style={styles.thinkingRow}>
-              <ThinkingIndicator label={thinkingLabel} />
+          hasMore ? (
+            <View style={styles.loadMoreRow}>
+              <ActivityIndicator size="small" color={colors.textMuted} />
             </View>
           ) : null
         }
@@ -160,32 +118,35 @@ export default function MessageList({ messages, isThinking, thinkingLabel, hasMo
 
 const styles = StyleSheet.create({
   content: {
-    paddingTop: 16,
-    paddingBottom: 8,
-    flexGrow: 1,
-    justifyContent: 'flex-end',
+    paddingTop: 8,
+    paddingBottom: 16,
+  },
+  bubbleWrapper: {
+    // No rotation needed because FlatList handles it, 
+    // but ensures layout remains stable.
   },
   loadMoreRow: {
     paddingVertical: 12,
     alignItems: 'center',
   },
   thinkingRow: {
-    paddingVertical: 4,
+    paddingVertical: 12,
+    paddingBottom: 20,
   },
   scrollToBottomBtn: {
     position: 'absolute',
-    bottom: 8,
+    bottom: 12,
     right: 16,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.2,
     shadowRadius: 4,
-    elevation: 4,
+    elevation: 5,
   },
 })
