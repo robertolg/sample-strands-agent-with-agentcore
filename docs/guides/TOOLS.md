@@ -11,7 +11,7 @@ The platform implements **81 tools** across 6 protocol categories and **18 tool 
 | Local Tools | 4 | 4 | Direct call |
 | Built-in Tools | 4 | 23 | AWS SDK (Code Interpreter) |
 | Browser Automation | 2 | 7 | AWS SDK + WebSocket / A2A |
-| Gateway Tools | 7 | 20 | MCP + SigV4 (Lambda) |
+| Gateway Tools | 7 | 20 | MCP + JWT (Lambda) |
 | Runtime A2A | 1 | 1 | A2A |
 | Runtime MCP (3LO) | 3 | 26 | MCP (OAuth) |
 
@@ -151,7 +151,7 @@ Autonomous browser automation powered by browser-use AI, deployed as a separate 
 
 ### 4. Gateway Tools (20 tools in 7 groups)
 
-Lambda functions exposed through AgentCore Gateway as MCP (Model Context Protocol) endpoints with SigV4 authentication.
+Lambda functions exposed through AgentCore Gateway as MCP (Model Context Protocol) endpoints with JWT authentication.
 
 #### Weather (2 tools)
 
@@ -225,7 +225,7 @@ Lambda functions exposed through AgentCore Gateway as MCP (Model Context Protoco
 mcp_client = MCPClient(
     lambda: streamablehttp_client(
         gateway_url,
-        auth=get_sigv4_auth(region)  # AWS SigV4 signing
+        auth=get_jwt_auth(cognito_token)  # Cognito JWT auth
     )
 )
 ```
@@ -346,7 +346,7 @@ by `SkillChatAgent`), not in this config file.
 | **Direct call** | In-container | N/A | Simple utilities |
 | **AWS SDK** | AWS services | IAM | Code Interpreter, Document generation |
 | **WebSocket** | AWS services | IAM | Real-time browser automation |
-| **MCP + SigV4** | Lambda via Gateway | AWS SigV4 | External APIs, scalable services |
+| **MCP + JWT** | Lambda via Gateway | AWS JWT | External APIs, scalable services |
 | **MCP + 3LO** | AgentCore Runtime | OAuth | User-authenticated services (Gmail, Calendar, Notion) |
 | **A2A** | AgentCore Runtime | AgentCore | Agent collaboration (Research, Browser-Use) |
 

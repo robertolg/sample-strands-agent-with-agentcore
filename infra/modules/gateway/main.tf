@@ -97,12 +97,17 @@ resource "aws_bedrockagentcore_gateway" "this" {
   }
 }
 
+# IAM trust policy propagation delay — Gateway service needs time to
+# recognize AssumeRole permission on the role before targets can be created.
+resource "time_sleep" "wait_for_iam_propagation" {
+  depends_on      = [aws_bedrockagentcore_gateway.this]
+  create_duration = "5s"
+}
+
 # ============================================================
 # Lambda-backed Gateway Targets (one per tool in tool-schemas.json)
 # ============================================================
 
-# One target per Lambda (MCP server). Each target exposes all of that Lambda's
-# tools via multiple inline_payload blocks.
 resource "aws_bedrockagentcore_gateway_target" "lambda" {
   for_each = local.tool_schemas
 
@@ -144,6 +149,8 @@ resource "aws_bedrockagentcore_gateway_target" "lambda" {
       }
     }
   }
+
+  depends_on = [time_sleep.wait_for_iam_propagation]
 }
 
 # ============================================================
@@ -168,6 +175,8 @@ resource "aws_bedrockagentcore_gateway_target" "runtimes" {
       }
     }
   }
+
+  depends_on = [time_sleep.wait_for_iam_propagation]
 }
 
 # ============================================================

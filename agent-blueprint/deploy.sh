@@ -11,6 +11,22 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# ============================================================
+# DEPRECATION NOTICE
+# ============================================================
+echo ""
+echo -e "${YELLOW}========================================================${NC}"
+echo -e "${YELLOW}  DEPRECATED: CDK deployment is no longer maintained.${NC}"
+echo -e "${YELLOW}  Use Terraform instead:${NC}"
+echo -e "${YELLOW}${NC}"
+echo -e "${YELLOW}    ./infra/scripts/deploy.sh apply${NC}"
+echo -e "${YELLOW}${NC}"
+echo -e "${YELLOW}  See DEPLOYMENT.md for full instructions.${NC}"
+echo -e "${YELLOW}========================================================${NC}"
+echo ""
+echo -e "Continuing with legacy CDK deployment in 5 seconds... (Ctrl+C to cancel)"
+sleep 5
+
 # Functions
 log_info() {
     echo -e "${GREEN}${NC} $1"

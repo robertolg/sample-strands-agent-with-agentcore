@@ -1,143 +1,147 @@
-# Strands Agent Chatbot
+# Troubleshooting Guide
 
-A full-stack chatbot application built with FastAPI backend and Next.js frontend, featuring AI-powered conversations using AWS Bedrock and Strands Agents framework.
-
-## Quick Start
-
-1. **Setup**: `./setup.sh`
-2. **Start**: `./start.sh`
-3. **Access**: Frontend at http://localhost:3000, Backend at http://localhost:8000
-
-## Troubleshooting
+## Local Development
 
 ### Backend Not Starting
 
 **Symptoms:**
-- Backend starts but immediately shuts down
-- OpenTelemetry errors in logs: `Transient error StatusCode.UNAVAILABLE encountered while exporting metrics to localhost:4317`
+- AgentCore container starts but immediately shuts down
+- OpenTelemetry errors in logs
 
 **Solution:**
-Create `backend/.env` file with OpenTelemetry configuration:
+Ensure environment variables are set in `.env`:
 
 ```bash
-# OpenTelemetry Configuration
-OTEL_PYTHON_DISTRO=opentelemetry-distro
-OTEL_PYTHON_CONFIGURATOR=opentelemetry_configurator
+# OpenTelemetry (disable for local dev)
 OTEL_METRICS_EXPORTER=none
 OTEL_TRACES_EXPORTER=none
 OTEL_LOGS_EXPORTER=none
-
-# Application Configuration
-DEPLOYMENT_ENV=development
 ```
 
 ### CORS Issues
 
 **Symptoms:**
-- Frontend shows "Backend disconnected" 
-- Browser console errors: `Access to fetch at 'http://localhost:8000' from origin 'http://localhost:3001' has been blocked by CORS policy`
-- OPTIONS preflight requests failing
-
-**Root Cause:**
-The backend CORS configuration only allows `http://localhost:3000` by default, but the frontend might run on different ports (3001, 3002, etc.) due to port conflicts.
+- Frontend shows "Backend disconnected"
+- Browser console CORS errors
 
 **Solution:**
-Add multiple localhost ports to CORS configuration in `backend/.env`:
-
-```bash
-# CORS Configuration - Add all potential frontend ports
-CORS_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:3002
-```
-
-**Alternative Solutions:**
-
-1. **Force specific frontend port:**
-   ```bash
-   cd frontend
-   PORT=3001 npx next dev
-   ```
-
-2. **Check which port frontend is using:**
-   - Look for "Local: http://localhost:XXXX" in start script output
-   - Ensure that port is included in CORS_ORIGINS
-
-3. **Verify CORS headers:**
-   ```bash
-   curl -X OPTIONS -H "Origin: http://localhost:3001" \
-        -H "Access-Control-Request-Method: POST" \
-        http://localhost:8000/stream/chat -v
-   ```
-
-**Common CORS Scenarios:**
-
-| Frontend Port | Backend CORS Setting Required |
-|---------------|-------------------------------|
-| 3000 | `http://localhost:3000` (default) |
-| 3001 | Add `http://localhost:3001` |
-| 3002 | Add `http://localhost:3002` |
+The frontend BFF proxies requests to agentcore, so CORS is typically not an issue. If running agentcore directly, ensure the CORS configuration includes the frontend origin.
 
 ### Port Conflicts
 
 **Symptoms:**
-- Warning: "Port 3000 is in use, using available port 3002 instead"
-- Frontend accessible on unexpected port
+- "Port 3000 is in use" or "Port 8080 is in use"
 
 **Solution:**
-The start script automatically detects available ports. Update CORS configuration to include the detected port, or kill the process using the desired port:
-
 ```bash
-# Find process using port 3000
+# Kill process on port 3000
 lsof -ti:3000 | xargs kill -9
 
-# Or include multiple ports in CORS config
-CORS_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:3002
+# Kill process on port 8080
+lsof -ti:8080 | xargs kill -9
 ```
 
-### API Endpoint Issues
+### Test Backend Connectivity
 
-**Important:** The chat endpoint is `/stream/chat`, not `/chat`. Verify frontend is calling the correct endpoint.
-
-**Test backend connectivity:**
 ```bash
 # Health check
-curl http://localhost:8000/health
+curl http://localhost:8080/ping
 
-# Chat endpoint test
+# AG-UI warmup
 curl -X POST -H "Content-Type: application/json" \
-     -d '{"message":"test"}' \
-     http://localhost:8000/stream/chat
+  -d '{"thread_id":"test","run_id":"test","state":{"action":"warmup"}}' \
+  http://localhost:8080/invocations
 ```
+
+## Cloud Deployment
+
+### Container Build Failures
+
+```bash
+# Check CodeBuild logs
+aws logs tail /aws/codebuild/agentcore-runtime-build --follow
+```
+
+### Runtime Execution Errors
+
+```bash
+# Check AgentCore Runtime logs (replace with actual ARN)
+aws logs tail /aws/bedrock-agentcore/runtimes/YOUR_RUNTIME_ARN --follow
+```
+
+### Gateway Connection Issues
+
+```bash
+# Verify gateway deployment
+aws bedrock-agentcore list-gateways --region us-west-2
+
+# Check gateway targets
+aws bedrock-agentcore list-gateway-targets \
+  --gateway-id YOUR_GATEWAY_ID --region us-west-2
+```
+
+### Terraform State Issues
+
+```bash
+# Re-initialize backend
+./infra/scripts/deploy.sh init
+
+# Force unlock if state is locked
+cd infra/environments/dev
+terraform force-unlock LOCK-ID
+```
+
+### OAuth 3LO "redirect_uri_mismatch"
+
+**Symptom:** Google OAuth returns `Error 400: redirect_uri_mismatch`
+
+**Cause:** The OAuth credential provider's callback URL doesn't match what's registered in Google Cloud Console.
+
+**Solution:**
+1. Get the current callback URL:
+   ```python
+   import boto3
+   client = boto3.client('bedrock-agentcore-control', region_name='us-west-2')
+   resp = client.get_oauth2_credential_provider(name='google-oauth-provider')
+   print(resp.get('callbackUrl'))
+   ```
+2. Register this URL in Google Cloud Console > Credentials > OAuth 2.0 Client > Authorized redirect URIs
+
+This URL is stable unless the OAuth provider is deleted and recreated. The Terraform module uses `prevent_destroy` to avoid accidental recreation.
+
+### CloudFront 403 or 502 Errors
+
+**Symptom:** CloudFront returns 403 Forbidden or 502 Bad Gateway
+
+**Check:**
+1. ECS tasks are running: `aws ecs list-tasks --cluster CLUSTER_NAME`
+2. ALB target group health: `aws elbv2 describe-target-health --target-group-arn ARN`
+3. CloudFront → ALB prefix list is correct
 
 ## Architecture
 
-- **Backend**: FastAPI with Strands Agents framework
-- **Frontend**: Next.js with TypeScript
-- **AI**: AWS Bedrock integration
-- **Communication**: Server-Sent Events (SSE) for streaming responses
+- **AgentCore Runtime**: FastAPI with Strands Agents, port 8080
+- **Frontend + BFF**: Next.js with TypeScript, port 3000
+- **AI Models**: AWS Bedrock (Claude, Nova)
+- **Communication**: Server-Sent Events (SSE) via AG-UI protocol
 
 ## Environment Variables
 
-### Backend (.env)
+### AgentCore (.env)
 ```bash
-# OpenTelemetry
 OTEL_METRICS_EXPORTER=none
 OTEL_TRACES_EXPORTER=none
 OTEL_LOGS_EXPORTER=none
-
-# CORS
-CORS_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:3002
-
-# Application
-DEPLOYMENT_ENV=development
-DEBUG=false
 ```
 
 ### Frontend
-Environment variables are automatically set by the start script based on detected backend port.
+Environment variables are configured via `.env` or set by `start.sh`. Key variables:
+- `NEXT_PUBLIC_AGENTCORE_LOCAL=true` — enables local mode
+- `NEXT_PUBLIC_AGENTCORE_URL=http://localhost:8080` — local agentcore URL
 
 ## Development
 
-- Backend runs on port 8000
-- Frontend auto-detects available port (3000, 3001, 3002, etc.)
-- API documentation: http://localhost:8000/docs
-- Health check: http://localhost:8000/health
+- AgentCore Runtime runs on port 8080
+- Frontend runs on port 3000
+- API documentation: http://localhost:8080/docs
+- Health check: http://localhost:8080/ping

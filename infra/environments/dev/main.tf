@@ -579,20 +579,23 @@ resource "null_resource" "mcp_3lo_workload_identity" {
       CALLBACK_URL="https://${module.chat.cloudfront_domain_name}/oauth-complete"
       REGION="${var.aws_region}"
 
-      # Get Workload Identity ARN from MCP 3LO Runtime
-      WI_ARN=$(python3 -c "
+      # Get Workload Identity ARN from MCP 3LO Runtime (retry up to 60s for async provisioning)
+      WI_ARN=""
+      for i in 1 2 3 4 5 6; do
+        WI_ARN=$(python3 -c "
 import boto3, sys
 client = boto3.client('bedrock-agentcore-control', region_name='$REGION')
 resp = client.get_agent_runtime(agentRuntimeArn='$RUNTIME_ARN')
 wi = resp.get('workloadIdentityDetails', {}).get('workloadIdentityArn', '')
-if not wi:
-    print('', end='')
-    sys.exit(0)
 print(wi, end='')
 " 2>/dev/null || echo "")
+        if [ -n "$WI_ARN" ]; then break; fi
+        echo "Waiting for Workload Identity provisioning... (attempt $i/6)"
+        sleep 10
+      done
 
       if [ -z "$WI_ARN" ]; then
-        echo "WARNING: Could not get Workload Identity ARN — skipping"
+        echo "WARNING: Workload Identity not available after 60s — skipping. Run 'terraform apply' again after runtime is fully provisioned."
         exit 0
       fi
 

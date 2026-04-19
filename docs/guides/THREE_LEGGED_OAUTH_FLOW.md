@@ -76,7 +76,7 @@ The frontend sends a chat message with the Cognito JWT as `auth_token`. The BFF 
 **Key files:**
 - `chatbot-app/frontend/src/app/api/stream/chat/route.ts` — extracts JWT, passes as `authToken`
 - `chatbot-app/agentcore/src/agent/mcp/mcp_runtime_client.py` — sets `Authorization: Bearer {jwt}` header
-- `agent-blueprint/agentcore-runtime-mcp-stack/src/agentcore_context_middleware.py` — extracts `WorkloadAccessToken` into context
+- MCP 3LO Runtime (deployed on AgentCore) — extracts `WorkloadAccessToken` from headers
 
 ### Step 4-5: Token Lookup
 
@@ -94,7 +94,7 @@ The MCP server's `OAuthHelper.get_access_token()` calls `get_resource_oauth2_tok
 - **Cache hit** — `accessToken` returned, tool proceeds normally
 - **Cache miss** — `authorizationUrl` returned, `OAuthRequiredException` raised
 
-**Key file:** `agent-blueprint/agentcore-runtime-mcp-stack/src/agentcore_oauth.py:214-267`
+**Key file:** MCP 3LO Runtime handles token retrieval via `get_resource_oauth2_token()` internally
 
 ### Step 6: OAuth Popup
 
@@ -177,11 +177,10 @@ print(response)
 
 | File | Role |
 |------|------|
-| `agentcore-runtime-mcp-stack/src/gmail_mcp_server.py` | MCP server with Gmail tools |
-| `agentcore-runtime-mcp-stack/src/agentcore_oauth.py` | Token retrieval and auth URL generation |
-| `agentcore-runtime-mcp-stack/src/agentcore_context_middleware.py` | Header extraction middleware |
-| `frontend/src/components/chat/ToolExecutionContainer.tsx` | Auto-opens OAuth popup |
-| `frontend/src/app/oauth-complete/page.tsx` | Handles Google redirect callback |
-| `frontend/src/app/api/oauth/complete/route.ts` | Calls CompleteResourceTokenAuth |
-| `agentcore/src/agent/mcp/mcp_runtime_client.py` | MCP Runtime client with JWT auth |
-| `agentcore-runtime-mcp-stack/deploy.sh` | Registers OAuth credential provider |
+| `chatbot-app/agentcore/src/agent/mcp/mcp_runtime_client.py` | MCP Runtime client with JWT auth |
+| `chatbot-app/agentcore/src/agent/mcp/elicitation_bridge.py` | Bridges OAuth elicitation between MCP server and frontend |
+| `chatbot-app/agentcore/src/streaming/agui_event_processor.py` | Streams `oauth_elicitation` events to frontend |
+| `chatbot-app/frontend/src/components/chat/ToolExecutionContainer.tsx` | Auto-opens OAuth popup |
+| `chatbot-app/frontend/src/app/oauth-complete/page.tsx` | Handles Google redirect callback |
+| `chatbot-app/frontend/src/app/api/stream/elicitation-complete/route.ts` | Signals elicitation completion |
+| `infra/modules/oauth-providers/main.tf` | Registers OAuth credential providers (Terraform) |

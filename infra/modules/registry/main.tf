@@ -4,6 +4,9 @@
 # boto3 API in a Lambda, invoke it as a CFN Custom Resource, and let CFN drive
 # Create/Update/Delete lifecycle. Definitions live in YAML under
 # infra/registry/definitions/ and are split into mcp/, a2a/, and skills/.
+#
+# Records are batched into 3 stacks by type (mcp, a2a, skills) to minimize
+# CloudFormation stack count while keeping type-level isolation.
 
 data "aws_caller_identity" "current" {}
 
@@ -34,9 +37,6 @@ locals {
   }
 
   # -- AGENT_SKILLS defs -----------------------------------------------------
-  # Each YAML has name + description + skill_md_path. We resolve skill_md_path
-  # against chatbot-app/agentcore/skills/ and inline the file content here so
-  # Terraform doesn't need Lambda to do the filesystem read.
   _skill_files = fileset("${local.definitions_root}/skills", "*.yaml")
   skill_defs = {
     for f in local._skill_files :
@@ -50,9 +50,8 @@ locals {
   }
 
   # MCP records get "-mcp-server" suffix; A2A and AGENT_SKILLS use the bare
-  # name. A skill YAML that shares a basename with an A2A definition (e.g.,
-  # code-agent, research-agent) is used only for its SKILL.md content — the
-  # Registry record for that basename is the A2A descriptor, not AGENT_SKILLS.
+  # name. A skill YAML that shares a basename with an A2A definition is used
+  # only for its SKILL.md content — the record uses the A2A descriptor.
   _mcp_records   = { for k, v in local.mcp_defs : "${k}-mcp-server" => v }
   _a2a_records   = { for k, v in local.a2a_defs : k => v }
   _skill_records = {
@@ -66,6 +65,11 @@ locals {
     for k, v in local.all_records : k => v
     if length(var.enabled_components) == 0 || contains(var.enabled_components, k)
   }
+
+  # Split records by type for batched stacks
+  mcp_records = { for k, v in local.records_to_register : k => v if v.descriptor_type == "MCP" }
+  a2a_records = { for k, v in local.records_to_register : k => v if v.descriptor_type == "A2A" }
+  skill_records = { for k, v in local.records_to_register : k => v if v.descriptor_type == "AGENT_SKILLS" }
 }
 
 # ============================================================
@@ -120,9 +124,6 @@ resource "aws_iam_role_policy" "registry_manager" {
         Resource = "*"
       },
       {
-        # Registry creation provisions an internal workload identity; without
-        # these the registry lands in CREATE_FAILED with
-        # "Unable to create workload identity because access was denied".
         Effect = "Allow"
         Action = [
           "bedrock-agentcore:CreateWorkloadIdentity",
@@ -184,64 +185,116 @@ resource "aws_cloudformation_stack" "registry" {
 }
 
 # ============================================================
-# Registry Records (one CFN stack per record)
+# Registry Records — batched by type (3 stacks total)
 # ============================================================
 
-resource "aws_cloudformation_stack" "records" {
-  for_each = local.records_to_register
+# Helper: build CFN resource properties for a single record
+locals {
+  _record_properties = {
+    for k, v in local.records_to_register : k => merge(
+      {
+        ServiceToken      = aws_lambda_function.registry_manager.arn
+        Action            = "MANAGE_RECORD"
+        RegistryId        = aws_cloudformation_stack.registry.outputs["RegistryId"]
+        RecordName        = k
+        RecordDescription = v.description
+        RecordVersion     = "1.0.0"
+        DescriptorType    = v.descriptor_type
+      },
+      v.descriptor_type == "AGENT_SKILLS" ? {
+        SkillMdContent = v.skill_md
+      } : {},
+      v.descriptor_type == "A2A" ? {
+        AgentCardJson = jsonencode(v.agent_card)
+      } : {},
+      v.descriptor_type == "MCP" ? {
+        ServerName        = "${var.project_name}/${lookup(lookup(v, "server", {}), "name", "${v.name}-mcp-server")}"
+        ServerDescription = v.description
+        DisplayName       = lookup(v, "display_name", v.name)
+        ToolsJson         = jsonencode({ tools = [
+          for t in v.tools : {
+            name        = t.name
+            description = t.description
+            inputSchema = {
+              type        = t.input_type
+              description = lookup(t, "input_description", null)
+              properties = {
+                for p in t.properties : p.name => merge(
+                  { type = p.type },
+                  lookup(p, "description", null) == null ? {} : { description = p.description }
+                )
+              }
+              required = [for p in t.properties : p.name if lookup(p, "required", false)]
+            }
+          }
+        ] })
+      } : {}
+    )
+  }
+}
 
-  name = "${var.project_name}-${var.environment}-record-${each.key}"
+# --- MCP Records Stack ---
+resource "aws_cloudformation_stack" "records_mcp" {
+  count = length(local.mcp_records) > 0 ? 1 : 0
+  name  = "${var.project_name}-${var.environment}-records-mcp"
 
   template_body = jsonencode({
     AWSTemplateFormatVersion = "2010-09-09"
     Resources = {
-      Record = {
+      for k, _ in local.mcp_records : "Record${replace(replace(k, "-", ""), "_", "")}" => {
         Type = "Custom::AgentCoreRegistryRecord"
-        Properties = merge(
-          {
-            ServiceToken      = aws_lambda_function.registry_manager.arn
-            Action            = "MANAGE_RECORD"
-            RegistryId        = aws_cloudformation_stack.registry.outputs["RegistryId"]
-            RecordName        = each.key
-            RecordDescription = each.value.description
-            RecordVersion     = "1.0.0"
-            DescriptorType    = each.value.descriptor_type
-          },
-          each.value.descriptor_type == "AGENT_SKILLS" ? {
-            SkillMdContent = each.value.skill_md
-          } : {},
-          each.value.descriptor_type == "A2A" ? {
-            AgentCardJson = jsonencode(each.value.agent_card)
-          } : {},
-          each.value.descriptor_type == "MCP" ? {
-            # Registry schema requires "namespace/server-name" format.
-            ServerName        = "${var.project_name}/${lookup(lookup(each.value, "server", {}), "name", "${each.value.name}-mcp-server")}"
-            ServerDescription = each.value.description
-            DisplayName       = lookup(each.value, "display_name", each.value.name)
-            ToolsJson         = jsonencode({ tools = [
-              for t in each.value.tools : {
-                name        = t.name
-                description = t.description
-                inputSchema = {
-                  type        = t.input_type
-                  description = lookup(t, "input_description", null)
-                  properties = {
-                    for p in t.properties : p.name => merge(
-                      { type = p.type },
-                      lookup(p, "description", null) == null ? {} : { description = p.description }
-                    )
-                  }
-                  required = [for p in t.properties : p.name if lookup(p, "required", false)]
-                }
-              }
-            ] })
-          } : {}
-        )
+        Properties = local._record_properties[k]
       }
     }
     Outputs = {
-      RecordId = {
-        Value = { "Fn::GetAtt" = ["Record", "RecordId"] }
+      for k, _ in local.mcp_records : "RecordId${replace(replace(k, "-", ""), "_", "")}" => {
+        Value = { "Fn::GetAtt" = ["Record${replace(replace(k, "-", ""), "_", "")}", "RecordId"] }
+      }
+    }
+  })
+
+  depends_on = [aws_cloudformation_stack.registry]
+}
+
+# --- A2A Records Stack ---
+resource "aws_cloudformation_stack" "records_a2a" {
+  count = length(local.a2a_records) > 0 ? 1 : 0
+  name  = "${var.project_name}-${var.environment}-records-a2a"
+
+  template_body = jsonencode({
+    AWSTemplateFormatVersion = "2010-09-09"
+    Resources = {
+      for k, _ in local.a2a_records : "Record${replace(replace(k, "-", ""), "_", "")}" => {
+        Type = "Custom::AgentCoreRegistryRecord"
+        Properties = local._record_properties[k]
+      }
+    }
+    Outputs = {
+      for k, _ in local.a2a_records : "RecordId${replace(replace(k, "-", ""), "_", "")}" => {
+        Value = { "Fn::GetAtt" = ["Record${replace(replace(k, "-", ""), "_", "")}", "RecordId"] }
+      }
+    }
+  })
+
+  depends_on = [aws_cloudformation_stack.registry]
+}
+
+# --- Skills Records Stack ---
+resource "aws_cloudformation_stack" "records_skills" {
+  count = length(local.skill_records) > 0 ? 1 : 0
+  name  = "${var.project_name}-${var.environment}-records-skills"
+
+  template_body = jsonencode({
+    AWSTemplateFormatVersion = "2010-09-09"
+    Resources = {
+      for k, _ in local.skill_records : "Record${replace(replace(k, "-", ""), "_", "")}" => {
+        Type = "Custom::AgentCoreRegistryRecord"
+        Properties = local._record_properties[k]
+      }
+    }
+    Outputs = {
+      for k, _ in local.skill_records : "RecordId${replace(replace(k, "-", ""), "_", "")}" => {
+        Value = { "Fn::GetAtt" = ["Record${replace(replace(k, "-", ""), "_", "")}", "RecordId"] }
       }
     }
   })

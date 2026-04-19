@@ -7,7 +7,8 @@ Tests cover:
 - Interrupt response handling
 - Disconnect-aware streaming
 - Error handling
-- Lifecycle actions (warmup, stop, elicitation)
+- Lifecycle actions (warmup, stop, elicitation, execution_status, resume)
+- Standalone GET endpoints (execution-status, resume)
 """
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -278,8 +279,8 @@ class TestInvocationsEndpoint:
         assert response.headers.get("x-session-id") == "my-session-123"
 
     @patch('routers.chat.create_agent')
-    def test_invocations_passes_enabled_tools(self, mock_factory, mock_agent):
-        """Test that enabled tools are passed to agent."""
+    def test_invocations_passes_enabled_skills(self, mock_factory, mock_agent):
+        """Test that enabled skills from state are passed to agent."""
         mock_factory.return_value = mock_agent
 
         from routers.chat import router
@@ -289,17 +290,13 @@ class TestInvocationsEndpoint:
         app.include_router(router)
         client = TestClient(app)
 
-        payload = _agui_payload()
-        payload["tools"] = [
-            {"name": "calculator", "description": "", "parameters": {}},
-            {"name": "web_search", "description": "", "parameters": {}},
-        ]
+        payload = _agui_payload(enabled_skills=["calculator", "web-search"])
 
         client.post("/invocations", json=payload)
 
         mock_factory.assert_called_once()
         call_kwargs = mock_factory.call_args.kwargs
-        assert call_kwargs['enabled_tools'] == ["calculator", "web_search"]
+        assert call_kwargs['enabled_skills'] == ["calculator", "web-search"]
 
     @patch('routers.chat.create_agent')
     def test_invocations_handles_files(self, mock_factory, mock_agent):
@@ -428,6 +425,142 @@ class TestLifecycleActions:
 
         assert response.status_code == 200
         assert response.json() == {"status": "elicitation_completed"}
+
+    def test_execution_status_not_found(self):
+        """Test execution_status action returns not_found for unknown execution."""
+        from routers.chat import router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        response = client.post(
+            "/invocations",
+            json={
+                "thread_id": "status-session",
+                "run_id": str(uuid.uuid4()),
+                "state": {"action": "execution_status", "execution_id": "nonexistent:run123"}
+            }
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "not_found"}
+
+    def test_execution_status_missing_id(self):
+        """Test execution_status action returns not_found when execution_id is missing."""
+        from routers.chat import router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        response = client.post(
+            "/invocations",
+            json={
+                "thread_id": "status-session",
+                "run_id": str(uuid.uuid4()),
+                "state": {"action": "execution_status"}
+            }
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "not_found"}
+
+    @pytest.mark.asyncio
+    async def test_execution_status_running(self):
+        """Test execution_status returns running for active execution."""
+        from routers.chat import router, registry
+
+        execution = await registry.create_execution("sess-status", "user-1", "run-1")
+
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        response = client.post(
+            "/invocations",
+            json={
+                "thread_id": "status-session",
+                "run_id": str(uuid.uuid4()),
+                "state": {"action": "execution_status", "execution_id": "sess-status:run-1"}
+            }
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "running"}
+
+        # Cleanup
+        execution.status = __import__('streaming.execution_registry', fromlist=['ExecutionStatus']).ExecutionStatus.COMPLETED
+        execution.completed_at = __import__('time').time()
+
+    def test_resume_missing_execution_id(self):
+        """Test resume action returns 400 when execution_id is missing."""
+        from routers.chat import router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        response = client.post(
+            "/invocations",
+            json={
+                "thread_id": "resume-session",
+                "run_id": str(uuid.uuid4()),
+                "state": {"action": "resume"}
+            }
+        )
+
+        assert response.status_code == 400
+
+    def test_resume_not_found(self):
+        """Test resume action returns 404 for unknown execution."""
+        from routers.chat import router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        response = client.post(
+            "/invocations",
+            json={
+                "thread_id": "resume-session",
+                "run_id": str(uuid.uuid4()),
+                "state": {"action": "resume", "execution_id": "nonexistent:run123"}
+            }
+        )
+
+        assert response.status_code == 404
+
+    def test_get_execution_status_endpoint(self):
+        """Test standalone GET /execution-status endpoint."""
+        from routers.chat import router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        response = client.get("/execution-status?executionId=nonexistent:run1")
+        assert response.status_code == 200
+        assert response.json() == {"status": "not_found"}
+
+    def test_get_resume_endpoint_not_found(self):
+        """Test standalone GET /resume endpoint returns 404 for unknown execution."""
+        from routers.chat import router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        response = client.get("/resume?executionId=nonexistent:run1&cursor=0")
+        assert response.status_code == 404
 
 
 # ============================================================

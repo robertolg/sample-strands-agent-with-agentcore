@@ -29,57 +29,29 @@ Fill in the table below:
 
 ---
 
-## Step 2: CDK Gateway Target
+## Step 2: YAML Tool Definition
 
-```typescript
-// File: agent-blueprint/agentcore-gateway-stack/infrastructure/lib/gateway-target-stack.ts
+Create a YAML file in `infra/registry/definitions/mcp/`:
 
-// 1. Get Lambda function reference
-const myLambdaFn = functions.get('YOUR_LAMBDA_NAME')!
+```yaml
+# File: infra/registry/definitions/mcp/YOUR_TARGET_NAME.yaml
 
-// 2. Add Gateway Target
-new agentcore.CfnGatewayTarget(this, 'YourToolTarget', {
-  name: 'YOUR_TARGET_NAME',  // ← From table above (kebab-case)
-  gatewayIdentifier: gateway.attrGatewayIdentifier,
-  description: 'SHORT DESCRIPTION',
-
-  credentialProviderConfigurations: [
-    {
-      credentialProviderType: 'GATEWAY_IAM_ROLE',
-    },
-  ],
-
-  targetConfiguration: {
-    mcp: {
-      lambda: {
-        lambdaArn: myLambdaFn.functionArn,
-        toolSchema: {
-          inlinePayload: [
-            {
-              name: 'YOUR_SCHEMA_NAME',  // ← ⭐ From table above (snake_case)
-              description: 'DETAILED DESCRIPTION OF WHAT THIS TOOL DOES',
-              inputSchema: {
-                type: 'object',
-                description: 'PARAMETERS DESCRIPTION',
-                required: ['REQUIRED_PARAM'],
-                properties: {
-                  REQUIRED_PARAM: {
-                    type: 'string',  // or 'integer', 'boolean', etc.
-                    description: 'PARAMETER DESCRIPTION',
-                  },
-                  OPTIONAL_PARAM: {
-                    type: 'string',
-                    description: 'OPTIONAL PARAMETER DESCRIPTION',
-                  },
-                },
-              },
-            },
-          ],
-        },
-      },
-    },
-  },
-})
+name: YOUR_TARGET_NAME           # ← From table above (kebab-case)
+description: SHORT DESCRIPTION
+display_name: Your Tool Name
+tools:
+  - name: YOUR_SCHEMA_NAME      # ← From table above (snake_case)
+    description: DETAILED DESCRIPTION OF WHAT THIS TOOL DOES
+    input_type: object
+    input_description: PARAMETERS DESCRIPTION
+    properties:
+      - name: REQUIRED_PARAM
+        type: string             # or integer, boolean, etc.
+        description: PARAMETER DESCRIPTION
+        required: true
+      - name: OPTIONAL_PARAM
+        type: string
+        description: OPTIONAL PARAMETER DESCRIPTION
 ```
 
 ---
@@ -118,9 +90,8 @@ new agentcore.CfnGatewayTarget(this, 'YourToolTarget', {
 ## Step 4: Deploy
 
 ```bash
-# 1. Deploy Gateway stack
-cd agent-blueprint/agentcore-gateway-stack/infrastructure
-npm run deploy
+# 1. Deploy Gateway via Terraform
+./infra/scripts/deploy.sh apply -target=module.gateway
 
 # 2. Restart agentcore (if running locally)
 # Server will auto-reload tools-config.json
@@ -187,8 +158,8 @@ EOF
 
 | Issue | Likely Cause | Fix |
 |-------|--------------|-----|
-| Tool doesn't appear in list | Wrong ID in config | Check `gateway_{schema_name}` matches CDK |
-| "Tool not found" error | Name mismatch | Verify CDK `toolSchema.name` is correct |
+| Tool doesn't appear in list | Wrong ID in config | Check `gateway_{schema_name}` matches YAML |
+| "Tool not found" error | Name mismatch | Verify YAML `tools[].name` is correct |
 | Tool appears but fails | Lambda error | Check Lambda logs in CloudWatch |
 | Name not simplified | FilteredMCPClient issue | Check `list_tools_sync()` logs |
 
@@ -206,43 +177,20 @@ Let's add a "Get Stock Price" tool:
 | Schema Name | `get_stock_price` ⭐ |
 | Config ID | `gateway_get_stock_price` |
 
-### CDK (gateway-target-stack.ts)
-```typescript
-const financeFn = functions.get('finance')!
-
-new agentcore.CfnGatewayTarget(this, 'GetStockPriceTarget', {
-  name: 'get-stock-price',
-  gatewayIdentifier: gateway.attrGatewayIdentifier,
-  description: 'Get current stock price',
-
-  credentialProviderConfigurations: [
-    { credentialProviderType: 'GATEWAY_IAM_ROLE' }
-  ],
-
-  targetConfiguration: {
-    mcp: {
-      lambda: {
-        lambdaArn: financeFn.functionArn,
-        toolSchema: {
-          inlinePayload: [{
-            name: 'get_stock_price',  // ⭐
-            description: 'Get current stock price for a given symbol',
-            inputSchema: {
-              type: 'object',
-              required: ['symbol'],
-              properties: {
-                symbol: {
-                  type: 'string',
-                  description: 'Stock ticker symbol (e.g., AAPL, MSFT)'
-                }
-              }
-            }
-          }]
-        }
-      }
-    }
-  }
-})
+### YAML Definition (infra/registry/definitions/mcp/finance.yaml)
+```yaml
+name: get-stock-price
+description: Get current stock price
+display_name: Stock Price
+tools:
+  - name: get_stock_price
+    description: Get current stock price for a given symbol
+    input_type: object
+    properties:
+      - name: symbol
+        type: string
+        description: Stock ticker symbol (e.g., AAPL, MSFT)
+        required: true
 ```
 
 ### tools-config.json
@@ -281,7 +229,7 @@ Success! ✅
 
 ## Done!
 
-- [ ] CDK code added
+- [ ] YAML definition added
 - [ ] tools-config.json updated
 - [ ] Deployed to AWS
 - [ ] Tested in Frontend

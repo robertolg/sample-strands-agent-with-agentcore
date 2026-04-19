@@ -35,7 +35,7 @@ https://github.com/user-attachments/assets/11b383c2-2e14-4135-833f-b0b2bce62953
 - Tool-enabled agents (search, finance, weather, browser, code interpreter)
 - Autonomous browser, documentation, and analysis workflows
 - Modular architecture adaptable to real customer use cases
-- Infrastructure-as-Code (CDK) for repeatable deployment
+- Infrastructure-as-Code (Terraform) for repeatable deployment
 
 If you are building **agentic AI applications on AWS** and want a concrete, end-to-end example,
 this repository is designed to be read, run, and extended.
@@ -54,10 +54,11 @@ This sample combines **Strands Agent orchestration** with **Amazon Bedrock Agent
 | **Strands Agents** | Multi-turn reasoning and tool orchestration |
 | **AgentCore Runtime** | Managed, containerized agent execution |
 | **AgentCore Memory** | Persistent conversation state and summarization |
-| **AgentCore Gateway** | MCP-based tool integration with SigV4 authentication |
+| **AgentCore Gateway** | MCP-based tool integration with JWT authentication |
 | **AgentCore Code Interpreter** | Secure Python execution for analysis and document generation |
 | **AgentCore Browser** | Headless browser automation with live view |
 | **AgentCore Identity** | End-user authentication and 3LO OAuth delegation |
+| **AgentCore Registry** | Central catalog for agent skills, MCP servers, and A2A agents |
 | **AgentCore Observability** | Trace collection and agent execution monitoring |
 | **Amazon Nova Act** | Visual reasoning model for browser automation |
 
@@ -118,7 +119,7 @@ skills/
 | Built-in Tools | AWS SDK / WebSocket | Code Interpreter, Browser (Nova Act) | IAM |
 | Gateway Tools | MCP | Google Search, Maps, Wikipedia, ArXiv, Finance | SigV4 |
 | Private API Tools | MCP (3LO OAuth) | Gmail, Google Calendar, Notion, GitHub | OAuth 2.0 |
-| A2A Tools | A2A | Research Agent, Browser-Use Agent | SigV4 |
+| A2A Tools | A2A | Research Agent, Browser-Use Agent | JWT |
 
 Total: **100+ tools across 20 tool groups**
 See [docs/guides/TOOLS.md](docs/guides/TOOLS.md) for full details.
@@ -230,28 +231,32 @@ Frontend will be available at http://localhost:3000.
 
 ### Cloud Deployment
 
-The interactive deployment script supports:
-	1.	AgentCore Runtime
-	2.	Frontend + BFF
-	3.	MCP Gateway tools
-	4.	A2A runtimes
-	5.	Full stack deployment
+```bash
+# Configure
+cp infra/environments/dev/terraform.tfvars.example infra/environments/dev/terraform.tfvars
+# Edit terraform.tfvars with your settings
+
+# Deploy all
+./infra/scripts/deploy.sh apply
+
+# Deploy specific modules
+./infra/scripts/deploy.sh apply -target=module.chat
+./infra/scripts/deploy.sh apply -target=module.runtime_orchestrator
 ```
-cd agent-blueprint
-./deploy.sh
-```
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for full instructions.
 
 ### Project Structure
 ```
 sample-strands-agent-chatbot/
 ├── chatbot-app/
-│   ├── frontend/
-│   └── agentcore/
-└── agent-blueprint/
-    ├── chatbot-deployment/
-    ├── agentcore-gateway-stack/
-    ├── agentcore-runtime-stack/
-    └── agentcore-runtime-a2a-stack/
+│   ├── frontend/          # Next.js UI + BFF
+│   └── agentcore/         # Python backend (Strands Agent)
+├── infra/                 # Terraform infrastructure
+│   ├── modules/           # Reusable modules (auth, runtime, gateway, chat, ...)
+│   ├── environments/dev/  # Environment configuration
+│   └── scripts/           # Deploy orchestrator
+└── agent-blueprint/       # Legacy CDK (deprecated)
 ```
 
 ## Documentation

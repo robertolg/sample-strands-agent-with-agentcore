@@ -28,11 +28,8 @@ This guide walks through configuring Google OAuth for Gmail tool access via Agen
 From the repository root:
 
 ```bash
-cd agent-blueprint
-./deploy.sh
+./infra/scripts/deploy.sh apply
 ```
-
-Select **Option 6** (AgentCore Runtime MCP - Gmail OAuth via 3LO) or **Option 7** (Full Stack).
 
 When prompted, enter your Google OAuth Client ID and Client Secret:
 

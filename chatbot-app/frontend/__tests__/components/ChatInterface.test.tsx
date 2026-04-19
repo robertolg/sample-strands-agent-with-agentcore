@@ -132,10 +132,6 @@ vi.mock('@/components/ChatSidebar', () => ({
   ChatSidebar: () => <div data-testid="chat-sidebar">Sidebar</div>
 }))
 
-vi.mock('@/components/ToolsDropdown', () => ({
-  ToolsDropdown: () => <div data-testid="tools-dropdown">Tools</div>
-}))
-
 vi.mock('@/components/SuggestedQuestions', () => ({
   SuggestedQuestions: () => <div data-testid="suggested-questions">Questions</div>
 }))
@@ -329,12 +325,6 @@ describe('ChatInterface', () => {
   })
 
   describe('Controls', () => {
-    it('should render tools dropdown', () => {
-      render(<ChatInterface />)
-
-      expect(screen.getByTestId('tools-dropdown')).toBeInTheDocument()
-    })
-
     it('should render model config button', () => {
       render(<ChatInterface />)
 

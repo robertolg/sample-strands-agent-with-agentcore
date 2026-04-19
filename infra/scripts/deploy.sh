@@ -478,7 +478,17 @@ clean_failed_registry_stacks() {
       ${prefix}registry)
         terraform state rm module.registry.aws_cloudformation_stack.registry 2>/dev/null || true
         ;;
+      ${prefix}records-mcp)
+        terraform state rm 'module.registry.aws_cloudformation_stack.records_mcp[0]' 2>/dev/null || true
+        ;;
+      ${prefix}records-a2a)
+        terraform state rm 'module.registry.aws_cloudformation_stack.records_a2a[0]' 2>/dev/null || true
+        ;;
+      ${prefix}records-skills)
+        terraform state rm 'module.registry.aws_cloudformation_stack.records_skills[0]' 2>/dev/null || true
+        ;;
       ${prefix}record-*)
+        # Legacy per-record stacks (from before batching) — clean up state if present
         local key="${s#${prefix}record-}"
         terraform state rm "module.registry.aws_cloudformation_stack.records[\"${key}\"]" 2>/dev/null || true
         ;;
@@ -504,70 +514,54 @@ PY
 
 # ------------------------------------------------------------
 # Reconcile Registry record descriptor_type drift.
-# Registry API rejects UpdateRegistryRecord when descriptor_type changes
-# ("X descriptor type can't have other descriptors"). When a YAML moves
-# between mcp/, a2a/, skills/, the next apply hits this. Detect drift by
-# comparing the existing stack's DescriptorType property with what the YAML
-# layout implies, and delete the stack (triggers CFN Delete -> Lambda
-# DeleteRegistryRecord) so terraform recreates with the new type.
+# Registry API rejects UpdateRegistryRecord when descriptor_type changes.
+# When a YAML moves between mcp/, a2a/, skills/, the batched stack must be
+# deleted and recreated. Delete the affected type stack so terraform recreates.
 # ------------------------------------------------------------
 reconcile_registry_record_drift() {
   cd "$ENV_DIR"
-  local prefix="${PROJECT_NAME}-dev-record-"
-  local defs="$INFRA_DIR/registry/definitions"
+  local prefix="${PROJECT_NAME}-dev-records-"
 
-  # bash 3.2 compatible: newline-separated "key=type" pairs instead of associative array.
-  local want=""
-  for f in "$defs"/mcp/*.yaml; do
-    [ -f "$f" ] || continue
-    want="${want}$(basename "$f" .yaml)-mcp-server=MCP"$'\n'
-  done
-  for f in "$defs"/a2a/*.yaml; do
-    [ -f "$f" ] || continue
-    want="${want}$(basename "$f" .yaml)=A2A"$'\n'
-  done
-  for f in "$defs"/skills/*.yaml; do
-    [ -f "$f" ] || continue
-    local k
-    k="$(basename "$f" .yaml)"
-    # a2a takes precedence — matches registry/main.tf _skill_records filter.
-    if printf '%s' "$want" | grep -qx "${k}=A2A"; then continue; fi
-    want="${want}${k}=AGENT_SKILLS"$'\n'
+  # Check each batched stack for type mismatches
+  for type_name in mcp a2a skills; do
+    local stack_name="${PROJECT_NAME}-dev-records-${type_name}"
+    local status
+    status=$(aws cloudformation describe-stacks \
+      --stack-name "$stack_name" --region "$AWS_REGION" \
+      --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+
+    if [ "$status" = "DOES_NOT_EXIST" ] || [ "$status" = "DELETE_COMPLETE" ]; then
+      continue
+    fi
+
+    # If stack is in a failed state, delete it for clean recreation
+    case "$status" in
+      *FAILED*|ROLLBACK_COMPLETE)
+        echo ">>> Registry records-${type_name} in $status, deleting for recreation"
+        aws cloudformation delete-stack --stack-name "$stack_name" --region "$AWS_REGION" 2>/dev/null || true
+        aws cloudformation wait stack-delete-complete --stack-name "$stack_name" --region "$AWS_REGION" 2>/dev/null || true
+        terraform state rm "module.registry.aws_cloudformation_stack.records_${type_name}[0]" 2>/dev/null || true
+        ;;
+    esac
   done
 
-  _lookup_desired() {
-    printf '%s' "$want" | awk -F= -v k="$1" '$1==k {print $2; exit}'
-  }
-
-  local stacks
-  stacks=$(aws cloudformation list-stacks \
+  # Also clean up any legacy per-record stacks from before batching
+  local legacy_prefix="${PROJECT_NAME}-dev-record-"
+  local legacy_stacks
+  legacy_stacks=$(aws cloudformation list-stacks \
     --region "$AWS_REGION" \
     --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE \
-    --query "StackSummaries[?starts_with(StackName, \`${prefix}\`)].StackName" \
+    --query "StackSummaries[?starts_with(StackName, \`${legacy_prefix}\`)].StackName" \
     --output text 2>/dev/null || true)
-  [ -z "$stacks" ] && return 0
 
-  for s in $stacks; do
-    local key="${s#${prefix}}"
-    local desired
-    desired="$(_lookup_desired "$key")"
-    [ -z "$desired" ] && continue
-
-    local current
-    current=$(aws cloudformation get-template \
-      --stack-name "$s" --region "$AWS_REGION" \
-      --query 'TemplateBody.Resources.Record.Properties.DescriptorType' \
-      --output text 2>/dev/null || echo "")
-
-    if [ -n "$current" ] && [ "$current" != "None" ] && [ "$current" != "$desired" ]; then
-      echo ">>> Registry record '$key': descriptor drift ($current -> $desired), recreating"
+  if [ -n "$legacy_stacks" ]; then
+    echo ">>> Cleaning legacy per-record stacks (migrated to batched stacks)"
+    for s in $legacy_stacks; do
       aws cloudformation delete-stack --stack-name "$s" --region "$AWS_REGION" 2>/dev/null || true
-      if ! aws cloudformation wait stack-delete-complete --stack-name "$s" --region "$AWS_REGION" 2>/dev/null; then
-        echo "  warn: delete wait failed for $s — check Lambda logs"
-      fi
+      local key="${s#${legacy_prefix}}"
       terraform state rm "module.registry.aws_cloudformation_stack.records[\"${key}\"]" 2>/dev/null || true
-    fi
-  done
+    done
+  fi
 }
 
 # ------------------------------------------------------------
@@ -643,6 +637,22 @@ case "$ACTION" in
       -var="enable_google_search=$([ "$SKIP_GOOGLE_SEARCH" = true ] && echo false || echo true)" \
       -var="enable_google_maps=$([ "$SKIP_GOOGLE_MAPS" = true ] && echo false || echo true)" \
       "$@"
+
+    echo ""
+    echo "========================================"
+    echo "  Deployment Complete"
+    echo "========================================"
+    echo ""
+    echo "Key Resources:"
+    echo "  CloudFront URL:      $(terraform output -raw chat_cloudfront_url 2>/dev/null || echo 'N/A')"
+    echo "  Gateway URL:         $(terraform output -raw gateway_url 2>/dev/null || echo 'N/A')"
+    echo "  Orchestrator ARN:    $(terraform output -raw orchestrator_runtime_arn 2>/dev/null || echo 'N/A')"
+    echo "  Cognito User Pool:   $(terraform output -raw cognito_user_pool_id 2>/dev/null || echo 'N/A')"
+    echo "  Cognito App Client:  $(terraform output -raw cognito_app_client_id 2>/dev/null || echo 'N/A')"
+    echo "  Memory ID:           $(terraform output -raw memory_id 2>/dev/null || echo 'N/A')"
+    echo ""
+    echo "  Run 'cd infra/environments/dev && terraform output' for all outputs."
+    echo ""
     ;;
   destroy)
     tf_init_if_needed

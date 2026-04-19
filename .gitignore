@@ -172,6 +172,7 @@ chatbot-app/agentcore/sessions/
 # Build artifacts
 *.tsbuildinfo
 tsconfig.tsbuildinfo
+**/.build/
 
 # Temporary test scripts
 verify-build.sh

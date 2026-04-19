@@ -4,6 +4,11 @@
 # are supplied. Callback URL is not exposed as a Terraform attribute, so we fetch
 # it post-create via AWS CLI and write it to SSM. The orchestrator and MCP 3LO
 # runtime read this SSM param to set the OAuth2CallbackUrl header.
+#
+# IMPORTANT: Once created, providers must NOT be destroyed — each has a unique
+# callback UUID registered in the external OAuth app (Google Console, GitHub, etc).
+# Recreating the provider changes the UUID, breaking OAuth flows until the user
+# re-registers the new URL. prevent_destroy guards against accidental deletion.
 
 locals {
   google_enabled = var.google_client_id != "" && var.google_client_secret != ""
@@ -22,6 +27,10 @@ resource "aws_bedrockagentcore_oauth2_credential_provider" "google" {
       client_id     = var.google_client_id
       client_secret = var.google_client_secret
     }
+  }
+
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
@@ -45,6 +54,10 @@ resource "aws_bedrockagentcore_oauth2_credential_provider" "github" {
       }
     }
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_bedrockagentcore_oauth2_credential_provider" "notion" {
@@ -66,6 +79,10 @@ resource "aws_bedrockagentcore_oauth2_credential_provider" "notion" {
         }
       }
     }
+  }
+
+  lifecycle {
+    prevent_destroy = true
   }
 }
 

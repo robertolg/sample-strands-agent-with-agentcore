@@ -13,49 +13,24 @@ The conversion between these formats is **automatic** via `FilteredMCPClient`.
 
 ## Adding a New Gateway Tool
 
-### Step 1: Define Gateway Target in CDK
+### Step 1: Define Gateway Tool in YAML
 
-```typescript
-// gateway-target-stack.ts
+Create a YAML definition in `infra/registry/definitions/mcp/`:
 
-new agentcore.CfnGatewayTarget(this, 'MyNewToolTarget', {
-  name: 'my-new-tool',  // ← Target name (kebab-case, for display)
-  gatewayIdentifier: gateway.attrGatewayIdentifier,
-  description: 'Description of my new tool',
-
-  credentialProviderConfigurations: [
-    {
-      credentialProviderType: 'GATEWAY_IAM_ROLE',
-    },
-  ],
-
-  targetConfiguration: {
-    mcp: {
-      lambda: {
-        lambdaArn: myLambdaFn.functionArn,
-        toolSchema: {
-          inlinePayload: [
-            {
-              name: 'my_new_tool',  // ← ⭐ IMPORTANT: Schema name (snake_case)
-              description: 'Performs a specific action...',
-              inputSchema: {
-                type: 'object',
-                description: 'Tool parameters',
-                required: ['param1'],
-                properties: {
-                  param1: {
-                    type: 'string',
-                    description: 'First parameter',
-                  },
-                },
-              },
-            },
-          ],
-        },
-      },
-    },
-  },
-})
+```yaml
+# File: infra/registry/definitions/mcp/my-new-tool.yaml
+name: my-new-tool
+description: Description of my new tool
+display_name: My New Tool
+tools:
+  - name: my_new_tool           # ← Schema name (snake_case)
+    description: Performs a specific action...
+    input_type: object
+    properties:
+      - name: param1
+        type: string
+        description: First parameter
+        required: true
 ```
 
 **Key Point**: Remember the **schema name** (`my_new_tool`). This is what you'll use in the next step.
@@ -93,10 +68,9 @@ new agentcore.CfnGatewayTarget(this, 'MyNewToolTarget', {
 
 ### Step 3: Deploy and Test
 
-1. **Deploy CDK stack**:
+1. **Deploy via Terraform**:
    ```bash
-   cd agent-blueprint/agentcore-gateway-stack/infrastructure
-   npm run deploy
+   ./infra/scripts/deploy.sh apply -target=module.gateway
    ```
 
 2. **Restart agentcore server**:
@@ -123,12 +97,12 @@ new agentcore.CfnGatewayTarget(this, 'MyNewToolTarget', {
 
 ## Naming Rules
 
-### Target Name (CDK `name` field)
+### Target Name (YAML `name` field)
 - **Format**: kebab-case
 - **Purpose**: Display/identification in AWS Console
 - **Example**: `search-places`, `get-weather`, `stock-analysis`
 
-### Schema Name (CDK `toolSchema.inlinePayload[].name`)
+### Schema Name (YAML `tools[].name`)
 - **Format**: snake_case
 - **Purpose**: Actual tool invocation name
 - **Example**: `search_places`, `get_weather`, `stock_analysis`
@@ -144,33 +118,35 @@ new agentcore.CfnGatewayTarget(this, 'MyNewToolTarget', {
 ## Examples
 
 ### Example 1: Google Maps Search Places
-```typescript
-// CDK
-name: 'search-places',  // Target name
-toolSchema: { name: 'search_places' }  // Schema name ⭐
+```yaml
+# infra/registry/definitions/mcp/google-maps.yaml
+name: search-places              # Target name
+tools:
+  - name: search_places          # Schema name
 
-// tools-config.json
-"id": "gateway_search_places",  // Config ID
+# tools-config.json
+"id": "gateway_search_places"    # Config ID
 
-// Automatic conversions
-// Frontend sends: "gateway_search_places"
-// Agent sees: "search_places"
-// Gateway receives: "search-places___search_places"
+# Automatic conversions
+# Frontend sends: "gateway_search_places"
+# Agent sees: "search_places"
+# Gateway receives: "search-places___search_places"
 ```
 
 ### Example 2: Weather Forecast
-```typescript
-// CDK
-name: 'get-weather-forecast',  // Target name
-toolSchema: { name: 'get_weather_forecast' }  // Schema name ⭐
+```yaml
+# infra/registry/definitions/mcp/weather.yaml
+name: get-weather-forecast       # Target name
+tools:
+  - name: get_weather_forecast   # Schema name
 
-// tools-config.json
-"id": "gateway_get_weather_forecast",  // Config ID
+# tools-config.json
+"id": "gateway_get_weather_forecast"  # Config ID
 
-// Automatic conversions
-// Frontend sends: "gateway_get_weather_forecast"
-// Agent sees: "get_weather_forecast"
-// Gateway receives: "get-weather-forecast___get_weather_forecast"
+# Automatic conversions
+# Frontend sends: "gateway_get_weather_forecast"
+# Agent sees: "get_weather_forecast"
+# Gateway receives: "get-weather-forecast___get_weather_forecast"
 ```
 
 ---
@@ -182,7 +158,7 @@ toolSchema: { name: 'get_weather_forecast' }  // Schema name ⭐
 
 **Check**:
 1. Verify `tools-config.json` uses `gateway_{schema_name}`
-2. Check CDK `toolSchema.name` matches `{schema_name}`
+2. Check YAML `tools[].name` matches `{schema_name}`
 3. Look for typos (underscore vs hyphen)
 
 ### Tool call fails with "tool not found in registry"
@@ -229,8 +205,11 @@ If you have existing configs with full names like `gateway_search-places___searc
   - `list_tools_sync()`: Filtering and name simplification
   - `call_tool_sync()`: Name restoration for Gateway calls
 
-- **Gateway Stack**: `agent-blueprint/agentcore-gateway-stack/infrastructure/lib/gateway-target-stack.ts`
-  - Gateway target definitions
+- **Gateway Definitions**: `infra/registry/definitions/mcp/*.yaml`
+  - Gateway tool YAML definitions (single source of truth)
+
+- **Gateway Terraform Module**: `infra/modules/gateway/main.tf`
+  - Gateway target resources
 
 - **Tools Config**: `chatbot-app/frontend/src/config/tools-config.json`
   - Frontend tool registry

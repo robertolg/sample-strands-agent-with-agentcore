@@ -8,29 +8,29 @@ Complete deployment instructions for the AgentCore-based chatbot platform.
 - **AWS CLI** configured with credentials
 - **Docker** installed and running
 - **Node.js** and **Python** installed
-- **CDK CLI**: `npm install -g aws-cdk`
+- **Terraform** >= 1.5
 - **AgentCore** enabled in your AWS account region
 
 ## Architecture Overview
 
 ```
-User → CloudFront → ALB → Frontend+BFF (Fargate)
-                              ↓ HTTP
+User -> CloudFront -> ALB -> Frontend+BFF (Fargate)
+                              | HTTP
                          AgentCore Runtime
                          (Strands Agent container)
-                              ↓
-            ┌─────────────────┼─────────────────┐
-            │                 │                 │
-            ↓ SigV4           ↓ A2A             ↓ AWS SDK
+                              |
+            +-----------------+-----------------+
+            |                 |                 |
+            v JWT             v A2A             v AWS SDK
      AgentCore Gateway   Research Agent    Built-in Tools
-     (MCP endpoints)     Runtime ✅        (Code Interpreter,
-            ↓                               Browser + Nova Act)
+     (MCP endpoints)     Runtime           (Code Interpreter,
+            |                               Browser + Nova Act)
      Lambda Functions (5x)
-     └─ Wikipedia, ArXiv,
+     +- Wikipedia, ArXiv,
         Google, Tavily, Finance
 
      AgentCore Memory
-     └─ Conversation history
+     +- Conversation history
         User preferences & facts
 ```
 
@@ -40,47 +40,45 @@ User → CloudFront → ALB → Frontend+BFF (Fargate)
 
 ```bash
 # 1. Configure environment
-cd agent-blueprint
-cp .env.example .env
-# Edit .env with your AWS credentials
+cp infra/environments/dev/terraform.tfvars.example infra/environments/dev/terraform.tfvars
+# Edit terraform.tfvars with your settings
 
 # 2. Deploy everything
-./deploy.sh
+./infra/scripts/deploy.sh apply
 ```
 
 This deploys:
 - Frontend + BFF (Fargate)
 - AgentCore Runtime with Memory
 - AgentCore Gateway + Lambda tools
-- Research Agent Runtime (A2A)
+- A2A Agent Runtimes (Research, Code)
 
-**Estimated Time**: 30-40 minutes
+**Estimated Time**: 20-30 minutes
 
 ### Remove All Components
 
 ```bash
-cd agent-blueprint
-./destroy.sh
+./infra/scripts/deploy.sh destroy
 ```
 
 ## What Gets Deployed
 
 ### 1. Frontend + BFF Stack
-- **Service**: Fargate
+- **Service**: ECS Fargate
 - **Components**: Next.js UI + API routes (BFF)
-- **Infrastructure**: VPC, ALB, CloudFront, Cognito
-- **Location**: `agent-blueprint/chatbot-deployment/`
+- **Infrastructure**: ALB, CloudFront, Cognito
+- **Module**: `infra/modules/chat`
 
 ### 2. AgentCore Runtime
 - **Container**: Strands Agent with local tools
 - **Documentation**: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agents-tools-runtime.html
-- **Location**: `agent-blueprint/agentcore-runtime-stack/`
+- **Module**: `infra/modules/runtime`
 
 ### 3. AgentCore Memory
 - **Purpose**: Persistent conversation storage with user preferences/facts retrieval
 - **Features**: Short-term (conversation history) + Long-term (user context)
 - **Documentation**: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/memory.html
-- **Location**: Deployed with AgentCore Runtime
+- **Module**: `infra/modules/memory`
 
 ### 4. Built-in Tools
 - **Protocol**: AWS SDK + WebSocket
@@ -88,10 +86,9 @@ cd agent-blueprint
   - Code Interpreter: Python code execution for diagrams/charts
   - Browser Automation: Web navigation and data extraction (Nova Act AI)
 - **Documentation**: https://docs.aws.amazon.com/bedrock/latest/userguide/
-- **Location**: Integrated with AgentCore Runtime
 
 ### 5. AgentCore Gateway
-- **Purpose**: MCP tool endpoints with SigV4 authentication
+- **Purpose**: MCP tool endpoints with JWT authentication (Cognito)
 - **Architecture**: Lambda functions exposed as MCP endpoints via AgentCore Gateway
 - **Tools**: 5 Lambda functions (12 tools total)
   - Wikipedia (2 tools)
@@ -100,57 +97,55 @@ cd agent-blueprint
   - Tavily (2 tools)
   - Finance (4 tools)
 - **Documentation**: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway.html
-- **Location**: `agent-blueprint/agentcore-gateway-stack/`
+- **Module**: `infra/modules/gateway` + `infra/modules/gateway-lambda-tool`
 
-### 6. Research Agent Runtime (A2A)
-- **Protocol**: A2A (Agent-to-Agent) with main Runtime
-- **Features**: Comprehensive web research with markdown reports and citations
-- **Storage**: S3 bucket for generated charts
-- **Status**: ✅ Production Ready
-- **Location**: `agent-blueprint/agentcore-runtime-a2a-stack/research-agent/`
+### 6. A2A Agent Runtimes
+- **Protocol**: A2A (Agent-to-Agent)
+- **Agents**: Research Agent, Code Agent
+- **Module**: `infra/modules/runtime` (type = `a2a_agent`)
 
 ## Step-by-Step Deployment
 
 ### Step 1: Configure Environment
 
 ```bash
-cd agent-blueprint
-cp .env.example .env
+cp infra/environments/dev/terraform.tfvars.example infra/environments/dev/terraform.tfvars
 ```
 
-Edit `.env`:
+Edit `terraform.tfvars`:
 
-```bash
-# AWS Configuration
-AWS_REGION=us-west-2
-AWS_ACCOUNT_ID=your-account-id
+```hcl
+project_name = "strands-agent-chatbot"
+environment  = "dev"
+aws_region   = "us-west-2"
 
 # AgentCore Configuration
-AGENTCORE_MODEL_ID=us.anthropic.claude-sonnet-4-20250514-v1:0
-AGENTCORE_TEMPERATURE=0.7
+agentcore_model_id    = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+agentcore_temperature = 0.7
 
-# Gateway Tools API Keys (optional)
-TAVILY_API_KEY=your-tavily-key
-GOOGLE_API_KEY=your-google-key
-GOOGLE_SEARCH_ENGINE_ID=your-engine-id
+# Gateway Tools API Keys (optional - can also use Secrets Manager)
+tavily_api_key          = ""
+google_api_key          = ""
+google_search_engine_id = ""
 ```
 
 ### Step 2: Deploy
 
 ```bash
-cd agent-blueprint
-
 # Deploy all components
-./deploy.sh
+./infra/scripts/deploy.sh apply
 
-# Or deploy individually:
-# ./deploy.sh --frontend     # Frontend + BFF only
-# ./deploy.sh --runtime      # AgentCore Runtime only
-# ./deploy.sh --gateway      # Gateway + Lambda tools only
-# ./deploy.sh --research-agent # Research Agent Runtime only
+# Or deploy individual modules:
+./infra/scripts/deploy.sh apply -target=module.chat          # Frontend + BFF only
+./infra/scripts/deploy.sh apply -target=module.runtime_orchestrator  # Orchestrator Runtime only
+./infra/scripts/deploy.sh apply -target=module.gateway       # Gateway + Lambda tools only
+./infra/scripts/deploy.sh apply -target=module.runtime_research_agent  # Research Agent only
+
+# Preview changes before applying
+./infra/scripts/deploy.sh plan
 ```
 
-### Step 3: Configure API Keys (if not in .env)
+### Step 3: Configure API Keys (if not in tfvars)
 
 ```bash
 # Tavily API Key
@@ -166,12 +161,11 @@ aws secretsmanager put-secret-value \
 
 ### Step 4: Access Application
 
+After deployment completes, Terraform outputs the CloudFront URL:
+
 ```bash
-# Get CloudFront URL
-aws cloudformation describe-stacks \
-  --stack-name ChatbotStack \
-  --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontUrl`].OutputValue' \
-  --output text
+cd infra/environments/dev
+terraform output cloudfront_url
 ```
 
 Visit the URL and:
@@ -188,12 +182,10 @@ cd chatbot-app
 ./setup.sh
 
 # 2. Configure AWS credentials
-cd ../agent-blueprint
 cp .env.example .env
 # Edit with your AWS credentials
 
 # 3. Start services
-cd ../chatbot-app
 ./start.sh
 ```
 
@@ -203,12 +195,14 @@ cd ../chatbot-app
 - API Docs: http://localhost:8000/docs
 
 **What runs locally**:
-- ✅ Frontend (Next.js)
-- ✅ AgentCore Runtime (Strands Agent)
-- ✅ Local Tools (5 tools)
-- ✅ Built-in Tools (Code Interpreter, Browser via AWS API)
-- ❌ AgentCore Gateway (requires cloud deployment)
-- ❌ AgentCore Memory (uses local file storage instead)
+- Frontend (Next.js)
+- AgentCore Runtime (Strands Agent)
+- Local Tools (5 tools)
+- Built-in Tools (Code Interpreter, Browser via AWS API)
+
+**Requires cloud** (not available locally):
+- AgentCore Gateway
+- AgentCore Memory (uses local file storage instead)
 
 **Note**: Local mode runs AgentCore Runtime in a container but still uses AWS Bedrock API for model calls and built-in tools.
 
@@ -218,39 +212,21 @@ cd ../chatbot-app
 
 Tools are disabled by default. Enable via UI:
 1. Sign in to application
-2. Click gear icon → Settings
+2. Click gear icon -> Settings
 3. Navigate to "Gateway Tools" section
 4. Toggle desired tools ON
 5. Click "Save"
 
-Or edit `chatbot-app/frontend/src/config/tools-config.json`:
-
-```json
-{
-  "gateway_targets": [
-    {
-      "id": "gateway_wikipedia-search",
-      "name": "Wikipedia",
-      "enabled": true,  // <- Change to true
-      "isDynamic": true
-    }
-  ]
-}
-```
-
 ### Verify Deployment
 
 ```bash
-# Test Gateway
-cd agent-blueprint/agentcore-gateway-stack
-./scripts/test-gateway.sh
+# Run end-to-end API test
+./infra/scripts/test-api.sh
 
 # Expected output:
-# ✅ Wikipedia tools: 2
-# ✅ ArXiv tools: 2
-# ✅ Google Search tools: 2
-# ✅ Tavily tools: 2
-# ✅ Finance tools: 4
+# Cognito login: OK
+# Gateway tools/list: OK
+# Orchestrator invoke: OK
 ```
 
 ## Troubleshooting
@@ -280,15 +256,22 @@ aws bedrock-agentcore list-gateway-targets \
   --gateway-id your-gateway-id
 ```
 
+### Terraform State Issues
+
+```bash
+# Re-initialize backend (safe, no data loss)
+./infra/scripts/deploy.sh init
+
+# Force unlock if state is locked
+cd infra/environments/dev
+terraform force-unlock LOCK-ID
+```
+
 ### Local Development Issues
 
 ```bash
 # Check AgentCore Runtime logs
 docker logs -f agentcore
-
-# Or check via Docker Compose
-cd chatbot-app
-docker-compose logs -f agentcore
 
 # Common issues:
 # - Port 8000 already in use (kill existing process or change port)
@@ -303,18 +286,22 @@ docker-compose logs -f agentcore
 ### Update Frontend or Runtime
 
 ```bash
-cd agent-blueprint
-./deploy.sh --frontend  # Update frontend only
-./deploy.sh --runtime   # Update runtime only
-./deploy.sh             # Update all
+# Update frontend only (rebuilds container if source changed)
+./infra/scripts/deploy.sh apply -target=module.chat
+
+# Update orchestrator runtime only
+./infra/scripts/deploy.sh apply -target=module.runtime_orchestrator
+
+# Update all (only changed modules rebuild)
+./infra/scripts/deploy.sh apply
 ```
+
+Terraform uses source file hashing for change detection. If source files haven't changed, `terraform apply` produces no changes (no forced redeployment).
 
 ### Update Gateway Lambda Functions
 
 ```bash
-cd agent-blueprint/agentcore-gateway-stack
-./scripts/build-lambdas.sh
-./scripts/deploy.sh
+./infra/scripts/deploy.sh apply -target=module.gateway
 ```
 
 ### Update Tool Configuration
@@ -324,8 +311,7 @@ cd agent-blueprint/agentcore-gateway-stack
 vim chatbot-app/frontend/src/config/tools-config.json
 
 # Redeploy frontend
-cd agent-blueprint
-./deploy.sh --frontend
+./infra/scripts/deploy.sh apply -target=module.chat
 ```
 
 ## Cleanup
@@ -333,39 +319,29 @@ cd agent-blueprint
 ### Remove All Components
 
 ```bash
-cd agent-blueprint
-./destroy.sh
+./infra/scripts/deploy.sh destroy
 ```
-
-This deletes (in order):
-1. Research Agent Runtime (if deployed)
-2. AgentCore Gateway and Lambda functions
-3. AgentCore Runtime
-4. Frontend + BFF
-5. VPC and networking resources
 
 ### Remove Individual Components
 
 ```bash
-cd agent-blueprint
-
-# Remove specific components
-./destroy.sh --research-agent # Research Agent only
-./destroy.sh --gateway        # Gateway only
-./destroy.sh --runtime        # Runtime only
-./destroy.sh --frontend       # Frontend only
+# Remove specific modules
+./infra/scripts/deploy.sh destroy -target=module.runtime_research_agent
+./infra/scripts/deploy.sh destroy -target=module.gateway
+./infra/scripts/deploy.sh destroy -target=module.runtime_orchestrator
+./infra/scripts/deploy.sh destroy -target=module.chat
 ```
 
 ### Clean ECR Repositories
 
 ```bash
-# Delete ECR repositories (optional)
+# Delete ECR repositories (optional, after destroy)
 aws ecr delete-repository \
-  --repository-name strands-agent-chatbot-frontend \
+  --repository-name strands-agent-chatbot/orchestrator \
   --force
 
 aws ecr delete-repository \
-  --repository-name strands-agent-chatbot-agent-core \
+  --repository-name strands-agent-chatbot/frontend \
   --force
 ```
 
@@ -385,13 +361,29 @@ aws ecr delete-repository \
 
 5. **Use Cognito MFA** for admin users
 
+## Infrastructure Details
+
+The Terraform infrastructure is organized as:
+
+```
+infra/
++-- bootstrap/             # S3 state bucket + DynamoDB lock (one-time)
++-- environments/dev/      # Root module wiring all components
++-- modules/
+|   +-- auth               # Cognito (pool, clients, resource server)
+|   +-- memory             # AgentCore Memory
+|   +-- data               # DynamoDB tables
+|   +-- runtime            # AgentCore Runtime (generic, supports all types)
+|   +-- gateway            # AgentCore Gateway
+|   +-- gateway-lambda-tool  # Lambda tool (for_each pattern)
+|   +-- chat               # ECS Fargate + ALB + CloudFront
++-- scripts/deploy.sh      # Auto-bootstrap + terraform orchestrator
+```
+
+For detailed migration status and design decisions, see `infra/PHASE-PLAN.md`.
+
 ## Support
 
-- **Troubleshooting**: [docs/guides/TROUBLESHOOTING.md](docs/guides/TROUBLESHOOTING.md)
 - **Architecture**: See README.md for architecture overview
 - **AgentCore Details**: See AGENTCORE.md for AgentCore usage
-- **Issues**: [GitHub Issues](https://github.com/aws-samples/sample-strands-agent-chatbot/issues)
-
----
-
-**Deployment Complete!** Access your chatbot via the CloudFront URL.
+- **Issues**: [GitHub Issues](https://github.com/aws-samples/sample-strands-agent-with-agentcore/issues)
