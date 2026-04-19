@@ -170,6 +170,126 @@ export async function invokeAgentCoreRuntime(
   }
 }
 
+/**
+ * Extract the original session ID from an executionId.
+ * executionId format: "{sessionId}:{runId}"
+ */
+function extractSessionId(executionId: string): string {
+  const colonIdx = executionId.lastIndexOf(':')
+  if (colonIdx === -1) return executionId
+  return executionId.substring(0, colonIdx)
+}
+
+
+/**
+ * Check execution status via backend ExecutionRegistry.
+ * Local: GET /execution-status. Cloud: POST /invocations with action.
+ * Uses the original session ID so the gateway routes to the correct container.
+ */
+export async function getExecutionStatus(
+  executionId: string,
+  userId: string,
+  authToken: string,
+): Promise<{ status: string }> {
+  try {
+    if (IS_LOCAL) {
+      const response = await fetch(
+        `${AGENTCORE_URL}/execution-status?executionId=${encodeURIComponent(executionId)}`,
+        { method: 'GET', signal: AbortSignal.timeout(10000) }
+      )
+      if (!response.ok) return { status: 'not_found' }
+      return await response.json()
+    }
+
+    const runtimeUrl = await getAgentCoreRuntimeUrl()
+    const sessionId = extractSessionId(executionId)
+    const payload = {
+      thread_id: sessionId,
+      run_id: crypto.randomUUID(),
+      messages: [],
+      tools: [],
+      context: [],
+      state: { action: 'execution_status', execution_id: executionId, user_id: userId }
+    }
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': sessionId,
+    }
+    if (authToken) headers['Authorization'] = authToken
+
+    const response = await fetch(runtimeUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!response.ok) return { status: 'not_found' }
+    return await response.json()
+  } catch (error) {
+    console.error('[AgentCore] getExecutionStatus failed:', error)
+    return { status: 'not_found' }
+  }
+}
+
+
+/**
+ * Resume an execution stream from a cursor position.
+ * Local: GET /resume. Cloud: POST /invocations with action.
+ * Uses the original session ID so the gateway routes to the correct container.
+ */
+export async function resumeExecution(
+  executionId: string,
+  cursor: number,
+  userId: string,
+  authToken: string,
+  abortSignal?: AbortSignal,
+): Promise<ReadableStream> {
+  if (IS_LOCAL) {
+    const url = `${AGENTCORE_URL}/resume?executionId=${encodeURIComponent(executionId)}&cursor=${cursor}`
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'Accept': 'text/event-stream' },
+      signal: abortSignal,
+    })
+    if (!response.ok) {
+      throw new Error(`Resume failed: ${response.status}`)
+    }
+    if (!response.body) throw new Error('No response stream from resume')
+    return response.body
+  }
+
+  const runtimeUrl = await getAgentCoreRuntimeUrl()
+  const sessionId = extractSessionId(executionId)
+  const payload = {
+    thread_id: sessionId,
+    run_id: crypto.randomUUID(),
+    messages: [],
+    tools: [],
+    context: [],
+    state: { action: 'resume', execution_id: executionId, cursor, user_id: userId }
+  }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream',
+    'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': sessionId,
+  }
+  if (authToken) headers['Authorization'] = authToken
+
+  const response = await fetch(runtimeUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+    signal: abortSignal,
+  })
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`Resume failed: ${response.status}: ${errorText}`)
+  }
+  if (!response.body) throw new Error('No response stream from resume')
+  return response.body
+}
+
+
 export async function pingAgentCoreRuntime(sessionId?: string, userId?: string, authToken?: string): Promise<{
   success: boolean
   latencyMs: number

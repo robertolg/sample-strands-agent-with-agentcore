@@ -6,7 +6,8 @@ Implements AgentCore Runtime standard endpoints:
 Agent execution is decoupled from SSE connections via ExecutionRegistry.
 Agent runs as a background task appending events to a buffer.
 SSE connections tail the buffer so the agent continues running even if the client disconnects.
-Resume/reconnection is handled by the BFF-side event buffer (Next.js).
+Resume/reconnection uses execution_status/resume actions via POST /invocations,
+plus standalone GET endpoints for local-mode convenience.
 """
 
 from fastapi import APIRouter, HTTPException, Request
@@ -216,6 +217,38 @@ async def invocations(http_request: Request):
         logger.info(f"[Elicitation] Complete for session={thread_id}, elicitation_id={elicitation_id}")
         return {"status": "elicitation_completed"}
 
+    # Execution status — check if a buffered execution is still running
+    if action == "execution_status":
+        execution_id = state.get("execution_id")
+        if not execution_id:
+            return {"status": "not_found"}
+        execution = registry.get_execution(execution_id)
+        if not execution:
+            return {"status": "not_found"}
+        return {"status": execution.status.value}
+
+    # Resume — reconnect to a running/completed execution's event buffer
+    if action == "resume":
+        execution_id = state.get("execution_id")
+        cursor = int(state.get("cursor", 0))
+        if not execution_id:
+            raise HTTPException(status_code=400, detail="execution_id required in state")
+        execution = registry.get_execution(execution_id)
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found or expired")
+        tail_stream = _create_tail_stream(execution, cursor, http_request)
+        final_stream = keepalive_stream(tail_stream, execution.session_id)
+        return StreamingResponse(
+            final_stream,
+            media_type=execution.media_type,
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+                "X-Execution-ID": execution.execution_id,
+            }
+        )
+
     # Normal agent execution — requires thread_id + run_id
     if "thread_id" not in body or "run_id" not in body:
         raise HTTPException(status_code=422, detail="AG-UI format required: thread_id and run_id are required")
@@ -227,6 +260,35 @@ async def invocations(http_request: Request):
 async def ping():
     """Health check endpoint required by AgentCore Runtime."""
     return {"status": "healthy"}
+
+
+@router.get("/execution-status")
+async def get_execution_status(executionId: str):
+    """Check execution status. Local-mode convenience endpoint."""
+    execution = registry.get_execution(executionId)
+    if not execution:
+        return {"status": "not_found"}
+    return {"status": execution.status.value}
+
+
+@router.get("/resume")
+async def resume_execution(executionId: str, cursor: int = 0, request: Request = None):
+    """Resume an execution stream from cursor. Local-mode convenience endpoint."""
+    execution = registry.get_execution(executionId)
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found or expired")
+    tail_stream = _create_tail_stream(execution, cursor, request)
+    final_stream = keepalive_stream(tail_stream, execution.session_id)
+    return StreamingResponse(
+        final_stream,
+        media_type=execution.media_type,
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "X-Execution-ID": execution.execution_id,
+        }
+    )
 
 
 def _parse_message(message: str, request_type: str) -> tuple[str, dict]:

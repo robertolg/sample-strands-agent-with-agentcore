@@ -1,10 +1,10 @@
 /**
  * Resume SSE stream endpoint (BFF)
- * Replays buffered events from the BFF in-memory execution buffer.
- * Works identically in local and cloud modes.
+ * Proxies to backend ExecutionRegistry for cursor-based event replay.
  */
 import { NextRequest } from 'next/server'
-import * as executionBuffer from '../../lib/execution-buffer'
+import { extractUserFromRequest } from '@/lib/auth-utils'
+import { resumeExecution } from '@/lib/agentcore-runtime-client'
 
 export const runtime = 'nodejs'
 
@@ -19,40 +19,29 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  const status = executionBuffer.getStatus(executionId)
-  if (status === 'not_found') {
+  const user = extractUserFromRequest(request)
+  const authToken = request.headers.get('authorization') || ''
+
+  console.log(`[Resume] Proxying to backend: execution=${executionId}, cursor=${cursor}`)
+
+  try {
+    const backendStream = await resumeExecution(
+      executionId, cursor, user.userId, authToken, request.signal
+    )
+
+    return new Response(backendStream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'X-Accel-Buffering': 'no',
+        'Connection': 'keep-alive',
+      },
+    })
+  } catch (error) {
+    console.error('[Resume] Backend resume failed:', error)
     return new Response(
-      JSON.stringify({ error: 'Execution not found' }),
+      JSON.stringify({ error: 'Execution not found or expired' }),
       { status: 404, headers: { 'Content-Type': 'application/json' } }
     )
   }
-
-  console.log(`[Resume] Replaying execution ${executionId} from cursor ${cursor} (status: ${status})`)
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder()
-      try {
-        for await (const event of executionBuffer.subscribe(executionId, cursor, request.signal)) {
-          if (request.signal.aborted) break
-          controller.enqueue(encoder.encode(event))
-        }
-      } catch (error) {
-        if (!request.signal.aborted) {
-          console.error('[Resume] Error:', error)
-        }
-      } finally {
-        try { controller.close() } catch { /* already closed */ }
-      }
-    },
-  })
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      'X-Accel-Buffering': 'no',
-      'Connection': 'keep-alive',
-    },
-  })
 }

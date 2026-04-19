@@ -14,7 +14,7 @@ locals {
   ]
 
   source_hash = sha1(join("", [
-    for f in local.frontend_files : filesha1("${local.frontend_dir}/${f}")
+    for f in local.frontend_files : try(filesha1("${local.frontend_dir}/${f}"), "")
   ]))
 
   build_arg_extra = join(" ", [

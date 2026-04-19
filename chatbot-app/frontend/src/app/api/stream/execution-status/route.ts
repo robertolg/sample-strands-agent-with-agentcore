@@ -1,10 +1,10 @@
 /**
  * Execution status endpoint (BFF)
- * Checks the in-memory execution buffer for status.
- * Works identically in local and cloud modes.
+ * Proxies to backend ExecutionRegistry via agentcore-runtime-client.
  */
 import { NextRequest, NextResponse } from 'next/server'
-import * as executionBuffer from '../../lib/execution-buffer'
+import { extractUserFromRequest } from '@/lib/auth-utils'
+import { getExecutionStatus } from '@/lib/agentcore-runtime-client'
 
 export async function GET(request: NextRequest) {
   const executionId = request.nextUrl.searchParams.get('executionId')
@@ -13,6 +13,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'executionId is required' }, { status: 400 })
   }
 
-  const status = executionBuffer.getStatus(executionId)
-  return NextResponse.json({ status })
+  const user = extractUserFromRequest(request)
+  const authToken = request.headers.get('authorization') || ''
+
+  const result = await getExecutionStatus(executionId, user.userId, authToken)
+  return NextResponse.json(result)
 }

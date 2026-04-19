@@ -7,7 +7,6 @@ import { invokeAgentCoreRuntime } from '@/lib/agentcore-runtime-client'
 import { extractUserFromRequest, getSessionId, ensureSessionExists } from '@/lib/auth-utils'
 import { createDefaultHookManager } from '@/lib/chat-hooks'
 import { getSystemPrompt } from '@/lib/system-prompts'
-import * as executionBuffer from '../../lib/execution-buffer'
 import sharp from 'sharp'
 // Note: browser-session-poller is dynamically imported when browser-use-agent is enabled
 
@@ -359,17 +358,14 @@ export async function POST(request: NextRequest) {
     // Create a custom stream that:
     // 1. Immediately starts sending keep-alive (before AgentCore responds)
     // 2. Continues keep-alive during AgentCore processing
-    // 3. Forwards AgentCore chunks when they arrive
-    // 4. Buffers all SSE events for resume support (even after client disconnect)
+    // 3. Forwards AgentCore chunks as passthrough (no parsing or buffering)
     const stream = new ReadableStream({
       async start(controller) {
         const encoder = new TextEncoder()
-        const decoder = new TextDecoder()
         let lastActivityTime = Date.now()
         let keepAliveInterval: NodeJS.Timeout | null = null
         let agentStarted = false
         let clientDisconnected = false
-        let currentExecutionId: string | null = null
 
         // Send initial keep-alive immediately to establish connection
         controller.enqueue(encoder.encode(`: connected ${new Date().toISOString()}\n\n`))
@@ -401,49 +397,17 @@ export async function POST(request: NextRequest) {
         // AbortController for AgentCore stream
         const agentCoreAbortController = new AbortController()
 
-        // Listen for client disconnect — do NOT cancel the reader.
-        // We continue reading from AgentCore to buffer events for resume.
+        // On client disconnect, abort the AgentCore reader.
+        // Agent continues as a backend background task; resume reconnects to backend buffer.
         request.signal.addEventListener('abort', () => {
-          console.log('[BFF] Client disconnected, continuing background read for event buffer')
+          console.log('[BFF] Client disconnected, aborting stream relay')
           clientDisconnected = true
           if (keepAliveInterval) {
             clearInterval(keepAliveInterval)
             keepAliveInterval = null
           }
+          agentCoreAbortController.abort()
         })
-
-        /**
-         * Parse raw byte chunks into complete SSE event strings.
-         * Returns an array of complete events (each ending with "\n\n").
-         * Leftover partial data is kept in sseBuffer for the next call.
-         */
-        let sseBuffer = ''
-        function parseSSEChunks(value: Uint8Array): string[] {
-          sseBuffer += decoder.decode(value, { stream: true })
-          const events: string[] = []
-          // Split on double-newline (SSE event boundary)
-          let boundary = sseBuffer.indexOf('\n\n')
-          while (boundary !== -1) {
-            const event = sseBuffer.substring(0, boundary + 2)  // include the \n\n
-            sseBuffer = sseBuffer.substring(boundary + 2)
-            events.push(event)
-            boundary = sseBuffer.indexOf('\n\n')
-          }
-          return events
-        }
-
-        /** Extract executionId from an execution_meta SSE event string. */
-        function extractExecutionId(event: string): string | null {
-          const dataMatch = event.match(/^data: (.+)$/m)
-          if (!dataMatch) return null
-          try {
-            const data = JSON.parse(dataMatch[1])
-            if (data.type === 'CUSTOM' && data.name === 'execution_meta') {
-              return data.value?.executionId || null
-            }
-          } catch { /* ignore */ }
-          return null
-        }
 
         try {
           // Execute before hooks (session metadata, tool config, etc.)
@@ -499,42 +463,26 @@ export async function POST(request: NextRequest) {
           )
           agentStarted = true
 
-          // Read from AgentCore stream, buffer events, and forward to client
+          // Simple byte passthrough — no parsing or buffering.
+          // Backend ExecutionRegistry handles event buffering for resume.
           const reader = agentStream.getReader()
 
           while (true) {
             const { done, value } = await reader.read()
             if (done) break
 
-            // Parse raw bytes into complete SSE events
-            const sseEvents = parseSSEChunks(value)
-            for (const evt of sseEvents) {
-              // Check for execution_meta to learn the executionId
-              if (!currentExecutionId) {
-                const execId = extractExecutionId(evt)
-                if (execId) {
-                  currentExecutionId = execId
-                  executionBuffer.create(execId)
-                  console.log(`[BFF] Execution buffer created: ${execId}`)
-                }
-              }
-
-              // Buffer the event
-              if (currentExecutionId) {
-                executionBuffer.append(currentExecutionId, evt)
-              }
-            }
-
-            // Forward raw bytes to client if still connected
             if (!clientDisconnected) {
               try {
                 controller.enqueue(value)
                 lastActivityTime = Date.now()
               } catch (err) {
-                // Client disconnected — continue reading for buffer
                 clientDisconnected = true
-                console.log('[BFF] Client disconnected mid-stream, continuing background read')
+                console.log('[BFF] Client disconnected mid-stream')
+                agentCoreAbortController.abort()
+                break
               }
+            } else {
+              break
             }
           }
 
@@ -554,12 +502,6 @@ export async function POST(request: NextRequest) {
             console.log('[BFF] Controller closed, cannot send error event')
           }
         } finally {
-          // Mark execution as completed in buffer
-          if (currentExecutionId) {
-            executionBuffer.complete(currentExecutionId)
-            console.log(`[BFF] Execution buffer completed: ${currentExecutionId}`)
-          }
-
           // Update session metadata after message processing
           try {
             let currentSession: any = null
