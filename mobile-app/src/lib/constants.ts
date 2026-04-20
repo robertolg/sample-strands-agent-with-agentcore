@@ -2,7 +2,7 @@ export const API_BASE_URL = (
   (process.env.EXPO_PUBLIC_API_URL as string | undefined) ?? 'http://localhost:3000'
 ).replace(/\/$/, '')
 
-export const DEFAULT_MODEL_ID = 'us.anthropic.claude-sonnet-4-6'
+export const DEFAULT_MODEL_ID = 'eu.amazon.nova-pro-v1:0'
 export const DEFAULT_TEMPERATURE = 0.7
 export const TEXT_BUFFER_FLUSH_MS = 120
 
@@ -31,16 +31,8 @@ export interface ModelInfo {
 }
 
 export const AVAILABLE_MODELS: ModelInfo[] = [
-  { id: 'us.anthropic.claude-opus-4-6-v1', name: 'Claude Opus 4.6', provider: 'Anthropic', description: 'Most intelligent model' },
-  { id: 'us.anthropic.claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'Anthropic', description: 'Balanced performance' },
-  { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', name: 'Claude Haiku 4.5', provider: 'Anthropic', description: 'Fast and efficient' },
-  { id: 'us.amazon.nova-2-pro-preview-20251202-v1:0', name: 'Nova 2 Pro', provider: 'Amazon', description: 'High-performance multimodal' },
-  { id: 'us.amazon.nova-2-lite-v1:0', name: 'Nova 2 Lite', provider: 'Amazon', description: 'Lightweight and efficient' },
-  { id: 'deepseek.v3.2', name: 'DeepSeek V3.2', provider: 'DeepSeek', description: 'Strong reasoning capabilities' },
-  { id: 'qwen.qwen3-235b-a22b-2507-v1:0', name: 'Qwen 235B', provider: 'Qwen', description: 'Large-scale language model' },
-  { id: 'qwen.qwen3-32b-v1:0', name: 'Qwen 32B', provider: 'Qwen', description: 'Efficient language model' },
-  { id: 'google.gemma-3-27b-it', name: 'Gemma 3 27B', provider: 'Google', description: 'Text and image model' },
-  { id: 'moonshot.kimi-k2-thinking', name: 'Kimi K2 Thinking', provider: 'Moonshot AI', description: 'Deep reasoning model' },
+  { id: 'eu.amazon.nova-pro-v1:0', name: 'Nova Pro', provider: 'Amazon', description: 'High-performance model' },
+  { id: 'eu.amazon.nova-lite-v1:0', name: 'Nova Lite', provider: 'Amazon', description: 'Lightweight and efficient model' },
 ]
 
 export const MODEL_STORAGE_KEY = 'selected_model_id'

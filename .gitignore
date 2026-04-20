@@ -187,3 +187,4 @@ browser-use
 **/pytest_cache/
 
 results
+/infra/.deploy-venv
